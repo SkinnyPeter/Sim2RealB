@@ -1,71 +1,83 @@
 import h5py
 import numpy as np
+
 from isaacsim import SimulationApp
 
+# Start Isaac Sim
 simulation_app = SimulationApp({"headless": False})
 
 from isaacsim.core.api import World
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.prims import SingleArticulation
 
-SCENE_PATH = r"/home/teamb/Desktop/Sim2RealB/scenes/scene.usd"
-H5_PATH    = r"/home/teamb/Desktop/Sim2RealB/data/20250827_151212.h5"
+SCENE_PATH = "/home/teamb/Desktop/Sim2RealB/scenes/scene.usd"
+H5_PATH = "/home/teamb/Desktop/Sim2RealB/data/20250827_151212.h5"
 
-with h5py.File(H5_PATH, "r") as f:
-    print(f.attrs.keys())          # check for a freq/hz attribute
-    print(dict(f.attrs))           # print all top-level metadata
-    if "timestamps" in f:
-        ts = np.array(f["timestamps"])
-        dt = np.mean(np.diff(ts))
-        print(f"Recorded at ~{1/dt:.1f} Hz")
+ROBOT_PATH = "/World/Franka"
 
-CHECK = False
-if CHECK:
-        
-    # -------------------
-    # setup
-    # -------------------
+
+def main():
+    # Open scene
     open_stage(SCENE_PATH)
-    world = World()
-    robot = SingleArticulation("/World/Franka", name="franka")
 
+    # Create world and robot wrapper
+    world = World()
+    robot = SingleArticulation(ROBOT_PATH, name="franka")
+
+    # Initialize simulation
     world.reset()
     robot.initialize()
 
-    world.play()  # start simulation
-
     print("DOF names:", robot.dof_names)
+    print("Number of DOF:", len(robot.dof_names))
 
-    # -------------------
-    # load dataset
-    # -------------------
+    # Load arm trajectory
     with h5py.File(H5_PATH, "r") as f:
+        if "observations/qpos_arm_left" not in f:
+            raise KeyError("Dataset 'observations/qpos_arm_left' not found in H5 file.")
+
         q_arm = np.array(f["observations/qpos_arm_left"])
 
-    print("Trajectory shape:", q_arm.shape)  # expect (2331, 7)
+    print("Trajectory shape:", q_arm.shape)
 
-    # -------------------
-    # replay
-    # -------------------
+    # Safety checks
+    if q_arm.ndim != 2 or q_arm.shape[1] != 7:
+        raise ValueError(
+            f"Expected arm trajectory of shape (N, 7), got {q_arm.shape}"
+        )
+
+    if len(robot.dof_names) < 9:
+        raise ValueError(
+            f"Expected at least 9 DOF for Franka + gripper, got {len(robot.dof_names)}"
+        )
+
     frame = 0
+
     while simulation_app.is_running():
+        world.step(render=True)
 
         if not world.is_playing():
-            world.step(render=True)
             continue
 
         if frame >= len(q_arm):
             print("Replay finished.")
             break
 
-        # set joint positions before stepping
-        q = np.zeros(9)
-        q[:7] = q_arm[frame]  # 7 arm joints
-        q[7:] = 0.04          # both fingers open
+        # 7 arm joints + 2 gripper joints
+        q = np.zeros(len(robot.dof_names))
+        q[:7] = q_arm[frame]
+
+        # Keep gripper open if available
+        if len(robot.dof_names) >= 9:
+            q[7] = 0.04
+            q[8] = 0.04
 
         robot.set_joint_positions(q)
         frame += 1
 
-        world.step(render=True)
 
-    simulation_app.close()
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        simulation_app.close()

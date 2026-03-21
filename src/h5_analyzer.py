@@ -1,9 +1,10 @@
 import h5py
 import numpy as np
 
-H5_DEFAULT_PATH = r"/home/teamb/Desktop/Sim2RealB/data/20250827_151212.h5"
+H5_DEFAULT_PATH = "data/20250827_151212.h5"
 
-class H5Analyzer():
+
+class H5Analyzer:
     """
     Utility class for inspecting and visualizing data stored in an HDF5 file.
 
@@ -16,6 +17,7 @@ class H5Analyzer():
     file_path : str, optional
         Path to the HDF5 file to analyze. Defaults to `H5_DEFAULT_PATH`.
     """
+
     def __init__(self, file_path=H5_DEFAULT_PATH):
         """
         Initialize the analyzer with the path to an HDF5 file.
@@ -27,7 +29,6 @@ class H5Analyzer():
         """
         self.file_path = file_path
 
-    # Inspect h5 file, return name, shape and dtype
     def inspect(self):
         """
         Inspect the HDF5 file structure.
@@ -42,29 +43,136 @@ class H5Analyzer():
         """
         with h5py.File(self.file_path, "r") as f:
             print("Top-level keys:", list(f.keys()))
-            
+
             # Print detailed info for all datasets
             def print_item(name, obj):
-                if isinstance(obj, h5py.Dataset):
+                if isinstance(obj, h5py.Group):
+                    print(f"GROUP:   {name}")
+                elif isinstance(obj, h5py.Dataset):
                     print(f"DATASET: {name}")
                     print(f"  shape: {obj.shape}")
                     print(f"  dtype: {obj.dtype}")
-                elif isinstance(obj, h5py.Group):
-                    print(f"GROUP:   {name}")
 
             f.visititems(print_item)
 
-            # Load likely joint datasets
-            qpos_arm  = np.array(f["observations/qpos_arm_left"])
-            qpos_hand = np.array(f["observations/qpos_hand_left"])
+            print("\n===== COMMON DATASETS =====")
 
-            print("\nqpos_arm:")
-            print(" shape:", qpos_arm.shape)
-            print(" first row:", qpos_arm[0])
+            # List of keys that should be on the h5 file
+            required_keys = [
+                "observations/qpos_arm_left",
+                "observations/qpos_arm_right",
+                "observations/qpos_hand_left",
+                "observations/qpos_hand_right",
+                "observations/images/aria_rgb_cam/color",
+                "observations/images/oakd_front_view/color",
+                "actions_arm_left",
+                "actions_arm_right",
+                "actions_hand_left",
+                "actions_hand_right",
+            ]
 
-            print("\nqpos_hand:")
-            print(" shape:", qpos_hand.shape)
-            print(" first row:", qpos_hand[0])
+            # Check if all keys are in the h5 file
+            for key in required_keys:
+                if key in f:
+                    data = np.array(f[key])
+                    print(f"\n{key}:")
+                    print("  shape:", data.shape)
+                    print("  dtype:", data.dtype)
+                    if data.ndim >= 1 and len(data) > 0:
+                        print("  first element preview:", data[0])
+                else:
+                    print(f"\n⚠️  ALERT: The key {key} is not found inside the h5 file. This will probably make IsaacSim crash.")
+                    
+    def play_video(self):
+        """
+        Display an image sequence from the HDF5 file as a video.
+
+        Parameters
+        ----------
+        video_key : str
+            Dataset path of the image sequence inside the HDF5 file.
+        delay_ms : int
+            Delay between frames in milliseconds.
+        """
+        video_key="observations/images/aria_rgb_cam/color" # /observations/images/oakd_front_view, observations/images/aria_rgb_cam/color
+        delay_ms=30
+
+        try:
+            import cv2
+        except ImportError:
+            print("ERROR: OpenCV not installed.")
+            print("Install it with: pip install opencv-python")
+            return
+
+        with h5py.File(self.file_path, "r") as f:
+            if video_key not in f:
+                print(f"Dataset '{video_key}' not found in file.")
+                return
+
+            images = f[video_key]
+            print(f"Playing video from: {video_key}")
+            print(f"Video shape: {images.shape}")
+
+            for i in range(images.shape[0]):
+                frame = images[i]
+
+                # Convert RGB -> BGR for OpenCV display
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+                cv2.imshow("Aria RGB Cam (Press ESC to quit)", frame)
+
+                # ESC to quit
+                if cv2.waitKey(delay_ms) & 0xFF == 27:
+                    break
+
+        cv2.destroyAllWindows()
+
+    def check_frequency(self, dataset_key="observations/qpos_arm_left"):
+        """
+        Estimate the recording frequency from a timestamp dataset.
+        Falls back to checking common timestamp locations in the file.
+        """
+        with h5py.File(self.file_path, "r") as f:
+
+            # 1. check for top-level timestamps
+            possible_ts_keys = [
+                "timestamps",
+                "observations/timestamps",
+                "t",
+                "time",
+                "observations/time",
+            ]
+
+            ts = None
+            for key in possible_ts_keys:
+                if key in f:
+                    ts = np.array(f[key])
+                    print(f"Found timestamps at: '{key}'")
+                    break
+
+            if ts is None:
+                print("No timestamp dataset found. Checking file attributes...")
+                print("Top-level attrs:", dict(f.attrs))
+
+                # fall back to estimating from dataset size only
+                data = np.array(f[dataset_key])
+                print(f"\nDataset '{dataset_key}' has {data.shape[0]} frames.")
+                print("Cannot compute Hz without timestamps.")
+                print("Ask your supervisor what frequency the robot was controlled at.")
+                return
+
+        # compute frequency from timestamps
+        diffs = np.diff(ts)
+        mean_dt = np.mean(diffs)
+        std_dt  = np.std(diffs)
+        hz      = 1.0 / mean_dt
+
+        print(f"\nTimestamp stats:")
+        print(f"  Total frames : {len(ts)}")
+        print(f"  Total duration: {ts[-1] - ts[0]:.2f} s")
+        print(f"  Mean dt      : {mean_dt*1000:.2f} ms")
+        print(f"  Std  dt      : {std_dt*1000:.2f} ms")
+        print(f"  Estimated Hz : {hz:.1f} Hz")
 
     def check_quat_convention(self, dataset_key="observations/qpos_arm_left", quat_indices=(3, 4, 5, 6)):
         """
@@ -140,95 +248,5 @@ class H5Analyzer():
             print("   Recommendation: use the FK cross-check method instead.")
 
 
-    def play_video(self):
-        """
-        Display an image sequence from the HDF5 file as a video.
-
-        The method reads frames from the dataset:
-        `observations/images/aria_rgb_cam/color`.
-
-        Frames are displayed using OpenCV until:
-        - The sequence ends
-        - The user presses the ESC key
-
-        Notes
-        -----
-        Requires the `opencv-python` package. If OpenCV is not installed,
-        the function will print an error message and exit.
-        """
-        try:
-            import cv2
-        except ImportError:
-            print("ERROR: OpenCV not installed\nThis methode requires OpenCV to play the video. Please install it.")
-            return
-
-        with h5py.File(self.file_path, "r") as f:
-            images = f["observations/images/oakd_front_view/color"] # /observations/images/oakd_front_view, observations/images/aria_rgb_cam/color
-
-            for i in range(images.shape[0]):
-                frame = images[i]
-
-                # convert RGB -> BGR for OpenCV
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-                cv2.imshow("Aria RGB Cam", frame)
-
-                if cv2.waitKey(30) & 0xFF == 27:  # press ESC to stop
-                    break
-
-        cv2.destroyAllWindows()
-
-    def check_frequency(self, dataset_key="observations/qpos_arm_left"):
-        """
-        Estimate the recording frequency from a timestamp dataset.
-        Falls back to checking common timestamp locations in the file.
-        """
-        with h5py.File(self.file_path, "r") as f:
-
-            # 1. check for top-level timestamps
-            possible_ts_keys = [
-                "timestamps",
-                "observations/timestamps",
-                "t",
-                "time",
-                "observations/time",
-            ]
-
-            ts = None
-            for key in possible_ts_keys:
-                if key in f:
-                    ts = np.array(f[key])
-                    print(f"Found timestamps at: '{key}'")
-                    break
-
-            if ts is None:
-                print("No timestamp dataset found. Checking file attributes...")
-                print("Top-level attrs:", dict(f.attrs))
-
-                # fall back to estimating from dataset size only
-                data = np.array(f[dataset_key])
-                print(f"\nDataset '{dataset_key}' has {data.shape[0]} frames.")
-                print("Cannot compute Hz without timestamps.")
-                print("Ask your supervisor what frequency the robot was controlled at.")
-                return
-
-        # compute frequency from timestamps
-        diffs = np.diff(ts)
-        mean_dt = np.mean(diffs)
-        std_dt  = np.std(diffs)
-        hz      = 1.0 / mean_dt
-
-        print(f"\nTimestamp stats:")
-        print(f"  Total frames : {len(ts)}")
-        print(f"  Total duration: {ts[-1] - ts[0]:.2f} s")
-        print(f"  Mean dt      : {mean_dt*1000:.2f} ms")
-        print(f"  Std  dt      : {std_dt*1000:.2f} ms")
-        print(f"  Estimated Hz : {hz:.1f} Hz")
-
-
 if __name__ == "__main__":
     analyzer = H5Analyzer()
-    analyzer.check_quat_convention()
-    #analyzer.play_video()
-    # analyzer.check_frequency()
-    # analyzer.inspect()
