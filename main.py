@@ -2,10 +2,10 @@ from src.h5_analyzer import H5Analyzer
 from isaacsim import SimulationApp
 
 # CONFIGURATION
-data_path = "C:/Users/pardo/Desktop/3DV/quat/Sim2RealB/data/20250826_111157.h5"
+data_path = "/home/teamb/Desktop/Sim2RealB_2/data/20250827_151212.h5"
 # data_path = ""data/20250827_151212.h5""
 
-scence_path = "C:/Users/pardo/Desktop/3DV/quat/Sim2RealB/scenes/scene.usd"
+scene_path = "scenes/scene.usd"
 def main():
     # Create an analyzer with the default file path
     analyzer = H5Analyzer(data_path)
@@ -18,12 +18,12 @@ def main():
     print("\nPlaying video from HDF5 file...")
     #analyzer.play_video()
 
-    simulation_app = SimulationApp({"headless": True})
+    simulation_app = SimulationApp({"headless": False})
 
     # Simulator needs to be import after simulation_app is created
-    from src.simulator import Simulator
+    from src.maxence_simulator import Simulator
 
-    simulator = Simulator(simulation_app, scence_path,data_path)
+    simulator = Simulator(simulation_app, scene_path,data_path)
     simulator.play()
 
     simulation_app.close()
