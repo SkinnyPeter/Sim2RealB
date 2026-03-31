@@ -8,8 +8,20 @@ import h5py
 import numpy as np
 import time
 
-PANDA_ARM_DESCRIPTION_PATH = r"/home/teamb/isaac-sim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/franka/rmpflow/robot_descriptor.yaml"
-PANDA_ARM_URDF_PATH              = r"/home/teamb/isaac-sim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/franka/lula_franka_gen.urdf"
+#PANDA_ARM_DESCRIPTION_PATH = r"~/home/teamb/isaac-sim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/franka/rmpflow/robot_descriptor.yaml"
+#PANDA_ARM_URDF_PATH              = r"/home/teamb/isaac-sim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/franka/lula_franka_gen.urdf"
+
+# Panda arm config
+from pathlib import Path
+
+ISAACSIM_ROOT = Path.home() / "isaac-sim"
+
+PANDA_ARM_DESCRIPTION_PATH = ISAACSIM_ROOT / "exts" / "isaacsim.robot_motion.motion_generation" / "motion_policy_configs" / "franka" / "rmpflow" / "robot_descriptor.yaml"
+
+PANDA_ARM_URDF_PATH = ISAACSIM_ROOT / "exts" / "isaacsim.robot_motion.motion_generation" / "motion_policy_configs" / "franka" / "lula_franka_gen.urdf"
+
+PANDA_ARM_DESCRIPTION_PATH = str(PANDA_ARM_DESCRIPTION_PATH)
+PANDA_ARM_URDF_PATH = str(PANDA_ARM_URDF_PATH)
 
 class Simulator:
     """
