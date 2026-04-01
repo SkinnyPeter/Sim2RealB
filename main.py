@@ -27,7 +27,7 @@ def main():
     simulation_app = SimulationApp({"headless": False})
 
     # Simulator needs to be import after simulation_app is created
-    from src.test_sim import Simulator
+    from src.simulator import Simulator
 
     simulator = Simulator(simulation_app, scene_path,data_path)
     simulator.play()
