@@ -1,8 +1,20 @@
-from src.H5analyzer import H5Analyzer
+from src.h5_analyzer import H5Analyzer
+from isaacsim import SimulationApp
+
+from pathlib import Path
+
+# Directory where main.py is located
+BASE_DIR = Path(__file__).resolve().parent
+
+data_path = BASE_DIR / "data" / "20250827_151212.h5"
+scene_path = BASE_DIR / "scenes" / "scene.usd"
+
+data_path = str(data_path)
+scene_path = str(scene_path)
 
 def main():
     # Create an analyzer with the default file path
-    analyzer = H5Analyzer()
+    analyzer = H5Analyzer(data_path)
 
     # Use the inspect() method
     print("Inspecting HDF5 file...")
@@ -12,6 +24,15 @@ def main():
     print("\nPlaying video from HDF5 file...")
     analyzer.play_video()
 
+    simulation_app = SimulationApp({"headless": False})
+
+    # Simulator needs to be import after simulation_app is created
+    from src.simulator import Simulator
+
+    simulator = Simulator(simulation_app, scene_path,data_path)
+    simulator.play()
+
+    simulation_app.close()
 
 if __name__ == "__main__":
     main()
