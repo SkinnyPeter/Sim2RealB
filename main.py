@@ -6,8 +6,11 @@ from pathlib import Path
 # Directory where main.py is located
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "20250827_151212.h5"
+data_path = BASE_DIR / "data" / "20250804_114103.h5"
 scene_path = BASE_DIR / "scenes" / "scene.usd"
+
+VISUALIZE_EEF = True   # draw EEF spheres (red = right, dark blue = left)
+SET_JOINTS    = False   # apply joint positions to arms and hands each frame
 
 data_path = str(data_path)
 scene_path = str(scene_path)
@@ -21,7 +24,7 @@ def main():
     analyzer.inspect()
 
     # Use the play_video() method
-    print("\nPlaying video from HDF5 file...")
+    print("\nPlaying video from HDF5 file...") 
     analyzer.play_video()
 
     simulation_app = SimulationApp({"headless": False})
@@ -29,8 +32,8 @@ def main():
     # Simulator needs to be import after simulation_app is created
     from src.simulator import Simulator
 
-    simulator = Simulator(simulation_app, scene_path,data_path)
-    simulator.play()
+    simulator = Simulator(simulation_app, scene_path, data_path)
+    simulator.play(visualize_eef=VISUALIZE_EEF, set_joints=SET_JOINTS)
 
     simulation_app.close()
 

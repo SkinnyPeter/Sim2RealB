@@ -14,6 +14,8 @@ from pathlib import Path
 
 from pxr import UsdPhysics
 
+from src.visualization import EEFVisualizer
+
 ISAACSIM_ROOT = Path.home() / "isaac-sim"
 
 PANDA_ARM_DESCRIPTION_PATH = str(
@@ -83,7 +85,7 @@ class Simulator:
         articulation.set_joint_positions(q_target)
         return True
 
-    def play(self):
+    def play(self, visualize_eef=False, set_joints=True):
         open_stage(self.stage_path)
         world = World()
 
@@ -154,8 +156,7 @@ class Simulator:
         print("right_hand_q shape   :", right_hand_q.shape)
         print("left_hand_q shape    :", left_hand_q.shape)
 
-        # Assuming arm data is [px, py, pz, qx, qy, qz, qw] or similar pose representation.
-        # Verify this. If this is actually joint-space, do NOT use IK.
+        # Arm data is EEF pose: [px, py, pz, qx, qy, qz, qw]
         right_positions = right_arm_data[:, 0:3]
         left_positions = left_arm_data[:, 0:3]
 
@@ -168,6 +169,8 @@ class Simulator:
             len(right_hand_q),
             len(left_hand_q),
         )
+
+        visualizer = EEFVisualizer() if visualize_eef else None
 
         frame = 0
         ik_fail_r = 0
@@ -225,23 +228,28 @@ class Simulator:
             )
 
             # ===== Apply arm joints =====
-            if ik_success_r:
-                q_r = np.asarray(joint_action_r.joint_positions, dtype=np.float32)
-                arm_right.set_joint_positions(q_r)
-            else:
-                ik_fail_r += 1
-                print(f"[frame {frame}] IK failed RIGHT")
+            if set_joints:
+                if ik_success_r:
+                    q_r = np.asarray(joint_action_r.joint_positions, dtype=np.float32)
+                    arm_right.set_joint_positions(q_r)
+                else:
+                    ik_fail_r += 1
+                    print(f"[frame {frame}] IK failed RIGHT")
 
-            if ik_success_l:
-                q_l = np.asarray(joint_action_l.joint_positions, dtype=np.float32)
-                arm_left.set_joint_positions(q_l)
-            else:
-                ik_fail_l += 1
-                print(f"[frame {frame}] IK failed LEFT")
+                if ik_success_l:
+                    q_l = np.asarray(joint_action_l.joint_positions, dtype=np.float32)
+                    arm_left.set_joint_positions(q_l)
+                else:
+                    ik_fail_l += 1
+                    print(f"[frame {frame}] IK failed LEFT")
 
             # ===== Apply hand joints directly =====
-            ok_r = self._safe_set_joints(hand_right, q_hand_r, "RIGHT HAND")
-            ok_l = self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")
+            ok_r = self._safe_set_joints(hand_right, q_hand_r, "RIGHT HAND") if set_joints else False
+            ok_l = self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")   if set_joints else False
+
+            # ===== EEF visualization =====
+            if visualizer is not None:
+                visualizer.draw(pos_r, pos_l)
 
             if frame % 100 == 0:
                 print(f"\nframe {frame}/{n_frames}")
