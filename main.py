@@ -6,7 +6,7 @@ from pathlib import Path
 # Directory where main.py is located
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "20250804_114103.h5"
+data_path = BASE_DIR / "data" / "20250827_151212.h5"
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 VISUALIZE_EEF = True   # draw EEF spheres (red = right, dark blue = left)
