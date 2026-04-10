@@ -16,16 +16,16 @@ data_path = str(data_path)
 scene_path = str(scene_path)
 
 def main():
-    # Create an analyzer with the default file path
-    analyzer = H5Analyzer(data_path)
+    # # Create an analyzer with the default file path
+    # analyzer = H5Analyzer(data_path)
 
-    # Use the inspect() method
-    print("Inspecting HDF5 file...")
-    analyzer.inspect()
+    # # Use the inspect() method
+    # print("Inspecting HDF5 file...")
+    # analyzer.inspect()
 
-    # Use the play_video() method
-    print("\nPlaying video from HDF5 file...") 
-    analyzer.play_video()
+    # # Use the play_video() method
+    # print("\nPlaying video from HDF5 file...") 
+    # analyzer.play_video()
 
     simulation_app = SimulationApp({"headless": False})
 
