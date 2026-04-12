@@ -170,14 +170,19 @@ class Simulator:
                 num_seeds=32,
                 position_threshold=0.005,
                 rotation_threshold=0.05,
-                use_cuda_graph=False,  # must be False when retract/seed_config changes each frame
             )
             curobo_solver_r = IKSolver(ik_config)
             curobo_solver_l = IKSolver(ik_config)
             print("curobo IK solver ready (num_seeds=32)")
-            # Previous-frame joint configs used as seeds for continuity (None → random seed on first frame)
-            prev_q_r = prev_retract_r = None
-            prev_q_l = prev_retract_l = None
+            # Initialize seeds to franka home pose so CUDA graph is captured with non-None tensors
+            # on frame 0 — subsequent frames update in-place (.copy_()) without breaking the graph.
+            # Solver DOF=7 (fingers are locked in franka.yml, excluded from optimization).
+            _dev = tensor_args.device
+            _home = torch.tensor([[0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0]], dtype=torch.float32, device=_dev)
+            prev_retract_r = _home.clone()           # (1, 7)
+            prev_retract_l = _home.clone()
+            prev_q_r = _home.unsqueeze(0).clone()    # (1, 1, 7)
+            prev_q_l = _home.unsqueeze(0).clone()
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -263,8 +268,6 @@ class Simulator:
 
             elif ik_solver == "curobo":
                 # curobo uses wxyz quaternion convention; cur_quat_* is xyzw — reorder
-                # tensors must be on CUDA (tensor_args.device = cuda:0)
-                _dev = tensor_args.device
                 if enable_right:
                     quat_wxyz_r = torch.tensor([[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]], dtype=torch.float32, device=_dev)
                     pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev)
@@ -275,8 +278,8 @@ class Simulator:
                         if ik_success_r:
                             q_arm_r = result_r.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
                             arm_right.set_joint_positions(q_arm_r.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            prev_retract_r = q_arm_r.unsqueeze(0)           # (1, 7)
-                            prev_q_r       = q_arm_r.unsqueeze(0).unsqueeze(0)  # (1, 1, 7)
+                            prev_retract_r.copy_(q_arm_r.unsqueeze(0))
+                            prev_q_r.copy_(q_arm_r.unsqueeze(0).unsqueeze(0))
                         else:
                             ik_fail_r += 1
                             print(f"[frame {frame}] IK failed RIGHT")
@@ -291,8 +294,8 @@ class Simulator:
                         if ik_success_l:
                             q_arm_l = result_l.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
                             arm_left.set_joint_positions(q_arm_l.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            prev_retract_l = q_arm_l.unsqueeze(0)
-                            prev_q_l       = q_arm_l.unsqueeze(0).unsqueeze(0)
+                            prev_retract_l.copy_(q_arm_l.unsqueeze(0))
+                            prev_q_l.copy_(q_arm_l.unsqueeze(0).unsqueeze(0))
                         else:
                             ik_fail_l += 1
                             print(f"[frame {frame}] IK failed LEFT")
