@@ -13,6 +13,7 @@ VISUALIZE_EEF = True   # draw EEF spheres (red = right, dark blue = left)
 SET_JOINTS    = True   # apply joint positions to arms and hands each frame
 ENABLE_RIGHT  = False   # enable motion + visualization for right arm
 ENABLE_LEFT   = True   # enable motion + visualization for left arm
+IK_SOLVER     = "curobo"  # "lula" or "curobo"
 
 data_path = str(data_path)
 scene_path = str(scene_path)
@@ -48,7 +49,7 @@ def main():
     from src.simulator import Simulator
 
     simulator = Simulator(simulation_app, scene_path, data_path)
-    simulator.play(visualize_eef=VISUALIZE_EEF, set_joints=SET_JOINTS, enable_right=ENABLE_RIGHT, enable_left=ENABLE_LEFT)
+    simulator.play(visualize_eef=VISUALIZE_EEF, set_joints=SET_JOINTS, enable_right=ENABLE_RIGHT, enable_left=ENABLE_LEFT, ik_solver=IK_SOLVER)
 
     simulation_app.close()
 

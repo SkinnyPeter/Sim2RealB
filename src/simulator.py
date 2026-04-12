@@ -12,6 +12,17 @@ import numpy as np
 import time
 from pathlib import Path
 
+try:
+    import torch
+    from curobo.types.base import TensorDeviceType
+    from curobo.types.math import Pose as CuroboPose
+    from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+    from curobo.types.robot import RobotConfig
+    from curobo.util_file import get_robot_configs_path, join_path, load_yaml
+    _CUROBO_AVAILABLE = True
+except ImportError:
+    _CUROBO_AVAILABLE = False
+
 from pxr import UsdPhysics
 
 from src.visualization import (
@@ -92,7 +103,7 @@ class Simulator:
         articulation.set_joint_positions(q_target)
         return True
 
-    def play(self, visualize_eef=False, set_joints=True, enable_right=True, enable_left=True):
+    def play(self, visualize_eef=False, set_joints=True, enable_right=True, enable_left=True, ik_solver="lula"):
         open_stage(self.stage_path)
         world = World()
 
@@ -146,6 +157,23 @@ class Simulator:
 
         print("EEF frame right:", articulation_solver_r.get_end_effector_frame())
         print("EEF frame left :", articulation_solver_l.get_end_effector_frame())
+
+        # ===== curobo IK solver setup =====
+        if ik_solver == "curobo":
+            if not _CUROBO_AVAILABLE:
+                raise RuntimeError("curobo is not installed — set IK_SOLVER='lula' or install curobo first.")
+            tensor_args = TensorDeviceType()
+            franka_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+            ik_config = IKSolverConfig.load_from_robot_config(
+                RobotConfig.from_dict(franka_cfg, tensor_args=tensor_args),
+                tensor_args=tensor_args,
+                num_seeds=32,
+                position_threshold=0.005,
+                rotation_threshold=0.05,
+            )
+            curobo_solver_r = IKSolver(ik_config)
+            curobo_solver_l = IKSolver(ik_config)
+            print("curobo IK solver ready (num_seeds=32)")
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -201,33 +229,65 @@ class Simulator:
             cur_quat_l = quat_l_flip
 
             # ===== Compute arm IK =====
-            # ArticulationKinematicsSolver expects world-frame positions and handles
-            # the robot base transform internally — pass raw positions only.
             ARM_JOINT_INDICES = list(range(7))
 
-            if enable_right:
-                joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
-                    target_position=pos_r,
-                    target_orientation=cur_quat_r,
-                )
-                if set_joints:
-                    if ik_success_r:
-                        arm_right.set_joint_positions(np.asarray(joint_action_r.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
-                    else:
-                        ik_fail_r += 1
-                        print(f"[frame {frame}] IK failed RIGHT")
+            if ik_solver == "lula":
+                # ArticulationKinematicsSolver handles base transform internally — pass raw world-frame pos
+                if enable_right:
+                    joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
+                        target_position=pos_r,
+                        target_orientation=cur_quat_r,
+                    )
+                    if set_joints:
+                        if ik_success_r:
+                            arm_right.set_joint_positions(np.asarray(joint_action_r.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                        else:
+                            ik_fail_r += 1
+                            print(f"[frame {frame}] IK failed RIGHT")
 
-            if enable_left:
-                joint_action_l, ik_success_l = articulation_solver_l.compute_inverse_kinematics(
-                    target_position=pos_l,
-                    target_orientation=cur_quat_l,
-                )
-                if set_joints:
-                    if ik_success_l:
-                        arm_left.set_joint_positions(np.asarray(joint_action_l.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
-                    else:
-                        ik_fail_l += 1
-                        print(f"[frame {frame}] IK failed LEFT")
+                if enable_left:
+                    joint_action_l, ik_success_l = articulation_solver_l.compute_inverse_kinematics(
+                        target_position=pos_l,
+                        target_orientation=cur_quat_l,
+                    )
+                    if set_joints:
+                        if ik_success_l:
+                            arm_left.set_joint_positions(np.asarray(joint_action_l.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                        else:
+                            ik_fail_l += 1
+                            print(f"[frame {frame}] IK failed LEFT")
+
+            elif ik_solver == "curobo":
+                # curobo uses wxyz quaternion convention; cur_quat_* is xyzw — reorder
+                # tensors must be on CUDA (tensor_args.device = cuda:0)
+                _dev = tensor_args.device
+                if enable_right:
+                    quat_wxyz_r = torch.tensor([[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]], dtype=torch.float32, device=_dev)
+                    pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev)
+                    goal_r = CuroboPose(position=pos_t_r, quaternion=quat_wxyz_r)
+                    result_r = curobo_solver_r.solve_single(goal_r)
+                    ik_success_r = bool(result_r.success[0])
+                    if set_joints:
+                        if ik_success_r:
+                            q_r = result_r.js_solution.position[0].cpu().numpy().reshape(-1)[:7].astype(np.float32)
+                            arm_right.set_joint_positions(q_r, joint_indices=ARM_JOINT_INDICES)
+                        else:
+                            ik_fail_r += 1
+                            print(f"[frame {frame}] IK failed RIGHT")
+
+                if enable_left:
+                    quat_wxyz_l = torch.tensor([[cur_quat_l[3], cur_quat_l[0], cur_quat_l[1], cur_quat_l[2]]], dtype=torch.float32, device=_dev)
+                    pos_t_l = torch.tensor([pos_l.tolist()], dtype=torch.float32, device=_dev)
+                    goal_l = CuroboPose(position=pos_t_l, quaternion=quat_wxyz_l)
+                    result_l = curobo_solver_l.solve_single(goal_l)
+                    ik_success_l = bool(result_l.success[0])
+                    if set_joints:
+                        if ik_success_l:
+                            q_l = result_l.js_solution.position[0].cpu().numpy().reshape(-1)[:7].astype(np.float32)
+                            arm_left.set_joint_positions(q_l, joint_indices=ARM_JOINT_INDICES)
+                        else:
+                            ik_fail_l += 1
+                            print(f"[frame {frame}] IK failed LEFT")
 
             # ===== EEF visualization =====
             VIZ_OFFSET = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # 1 m up for unobstructed inspection
