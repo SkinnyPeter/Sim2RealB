@@ -170,10 +170,14 @@ class Simulator:
                 num_seeds=32,
                 position_threshold=0.005,
                 rotation_threshold=0.05,
+                use_cuda_graph=False,  # must be False when retract/seed_config changes each frame
             )
             curobo_solver_r = IKSolver(ik_config)
             curobo_solver_l = IKSolver(ik_config)
             print("curobo IK solver ready (num_seeds=32)")
+            # Previous-frame joint configs used as seeds for continuity (None → random seed on first frame)
+            prev_q_r = prev_retract_r = None
+            prev_q_l = prev_retract_l = None
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -265,12 +269,14 @@ class Simulator:
                     quat_wxyz_r = torch.tensor([[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]], dtype=torch.float32, device=_dev)
                     pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev)
                     goal_r = CuroboPose(position=pos_t_r, quaternion=quat_wxyz_r)
-                    result_r = curobo_solver_r.solve_single(goal_r)
+                    result_r = curobo_solver_r.solve_single(goal_r, retract_config=prev_retract_r, seed_config=prev_q_r)
                     ik_success_r = bool(result_r.success[0])
                     if set_joints:
                         if ik_success_r:
-                            q_r = result_r.js_solution.position[0].cpu().numpy().reshape(-1)[:7].astype(np.float32)
-                            arm_right.set_joint_positions(q_r, joint_indices=ARM_JOINT_INDICES)
+                            q_arm_r = result_r.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
+                            arm_right.set_joint_positions(q_arm_r.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                            prev_retract_r = q_arm_r.unsqueeze(0)           # (1, 7)
+                            prev_q_r       = q_arm_r.unsqueeze(0).unsqueeze(0)  # (1, 1, 7)
                         else:
                             ik_fail_r += 1
                             print(f"[frame {frame}] IK failed RIGHT")
@@ -279,12 +285,14 @@ class Simulator:
                     quat_wxyz_l = torch.tensor([[cur_quat_l[3], cur_quat_l[0], cur_quat_l[1], cur_quat_l[2]]], dtype=torch.float32, device=_dev)
                     pos_t_l = torch.tensor([pos_l.tolist()], dtype=torch.float32, device=_dev)
                     goal_l = CuroboPose(position=pos_t_l, quaternion=quat_wxyz_l)
-                    result_l = curobo_solver_l.solve_single(goal_l)
+                    result_l = curobo_solver_l.solve_single(goal_l, retract_config=prev_retract_l, seed_config=prev_q_l)
                     ik_success_l = bool(result_l.success[0])
                     if set_joints:
                         if ik_success_l:
-                            q_l = result_l.js_solution.position[0].cpu().numpy().reshape(-1)[:7].astype(np.float32)
-                            arm_left.set_joint_positions(q_l, joint_indices=ARM_JOINT_INDICES)
+                            q_arm_l = result_l.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
+                            arm_left.set_joint_positions(q_arm_l.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                            prev_retract_l = q_arm_l.unsqueeze(0)
+                            prev_q_l       = q_arm_l.unsqueeze(0).unsqueeze(0)
                         else:
                             ik_fail_l += 1
                             print(f"[frame {frame}] IK failed LEFT")
