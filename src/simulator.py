@@ -1,6 +1,6 @@
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
-from isaacsim.core.prims import SingleArticulation
+from isaacsim.core.prims import SingleArticulation, XFormPrim
 from isaacsim.robot_motion.motion_generation import (
     ArticulationKinematicsSolver,
     LulaKinematicsSolver,
@@ -14,27 +14,22 @@ from pathlib import Path
 
 from pxr import UsdPhysics
 
-from src.visualization import EEFVisualizer
+from src.visualization import (
+    EEFVisualizer,
+    COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z,
+    COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED,
+    ORIENT_LENGTH, FRAME_LINE_SIZE,
+)
 
-ISAACSIM_ROOT = Path.home() / "isaac-sim"
+import isaacsim.robot_motion.motion_generation as _mg_pkg
+_MOTION_GEN_EXT = Path(_mg_pkg.__file__).parents[3]  # .../isaacsim.robot_motion.motion_generation/
 
 PANDA_ARM_DESCRIPTION_PATH = str(
-    ISAACSIM_ROOT
-    / "exts"
-    / "isaacsim.robot_motion.motion_generation"
-    / "motion_policy_configs"
-    / "franka"
-    / "rmpflow"
-    / "robot_descriptor.yaml"
+    _MOTION_GEN_EXT / "motion_policy_configs" / "franka" / "rmpflow" / "robot_descriptor.yaml"
 )
 
 PANDA_ARM_URDF_PATH = str(
-    ISAACSIM_ROOT
-    / "exts"
-    / "isaacsim.robot_motion.motion_generation"
-    / "motion_policy_configs"
-    / "franka"
-    / "lula_franka_gen.urdf"
+    _MOTION_GEN_EXT / "motion_policy_configs" / "franka" / "lula_franka_gen.urdf"
 )
 
 
@@ -43,6 +38,18 @@ class Simulator:
         self.app = app
         self.stage_path = str(stage_path)
         self.h5_path = str(h5_path)
+
+        missing = []
+        for label, path in [
+            ("Stage (USD scene)",       self.stage_path),
+            ("H5 dataset",              self.h5_path),
+            ("Franka robot descriptor", PANDA_ARM_DESCRIPTION_PATH),
+            ("Franka LULA URDF",        PANDA_ARM_URDF_PATH),
+        ]:
+            if not Path(path).exists():
+                missing.append(f"  {label}: {path}")
+        if missing:
+            raise FileNotFoundError("Missing required files:\n" + "\n".join(missing))
 
     def inspect(self):
         open_stage(self.stage_path)
@@ -85,7 +92,7 @@ class Simulator:
         articulation.set_joint_positions(q_target)
         return True
 
-    def play(self, visualize_eef=False, set_joints=True):
+    def play(self, visualize_eef=False, set_joints=True, enable_right=True, enable_left=True):
         open_stage(self.stage_path)
         world = World()
 
@@ -106,21 +113,19 @@ class Simulator:
             SingleArticulation("/World/Franka_left", name="franka_left")
         )
 
-        hand_right = world.scene.add(
-            SingleArticulation("/World/scene_combined/right_tower/right_tower", name="orca_right")
-        )
-
-        hand_left = world.scene.add(
-            SingleArticulation("/World/scene_combined/left_tower/left_tower", name="orca_left")
-        )
-
         world.reset()
+
+        # ===== Arm base positions in world frame =====
+        base_pos_r, _ = arm_right.get_world_pose()
+        base_pos_l, _ = arm_left.get_world_pose()
+
+        # ===== EEF prim handles for actual pose readback =====
+        eef_prim_r = XFormPrim("/World/Franka_right/panda_hand")
+        eef_prim_l = XFormPrim("/World/Franka_left/panda_hand")
 
         # ===== Print DOF order once =====
         self._print_articulation_info(arm_right, "RIGHT ARM")
         self._print_articulation_info(arm_left, "LEFT ARM")
-        self._print_articulation_info(hand_right, "RIGHT HAND")
-        self._print_articulation_info(hand_left, "LEFT HAND")
 
         # ===== IK solvers for arms =====
         kin_solver_r = LulaKinematicsSolver(
@@ -147,14 +152,9 @@ class Simulator:
             right_arm_data = np.array(f["observations/qpos_arm_right"])
             left_arm_data = np.array(f["observations/qpos_arm_left"])
 
-            right_hand_q = np.array(f["observations/qpos_hand_right"], dtype=np.float32)
-            left_hand_q  = np.array(f["observations/qpos_hand_left"], dtype=np.float32)
-
         print("\n===== H5 DATA =====")
         print("right_arm_data shape :", right_arm_data.shape)
         print("left_arm_data shape  :", left_arm_data.shape)
-        print("right_hand_q shape   :", right_hand_q.shape)
-        print("left_hand_q shape    :", left_hand_q.shape)
 
         # Arm data is EEF pose: [px, py, pz, qx, qy, qz, qw]
         right_positions = right_arm_data[:, 0:3]
@@ -163,12 +163,7 @@ class Simulator:
         right_quaternions = right_arm_data[:, 3:7]
         left_quaternions = left_arm_data[:, 3:7]
 
-        n_frames = min(
-            len(right_positions),
-            len(left_positions),
-            len(right_hand_q),
-            len(left_hand_q),
-        )
+        n_frames = min(len(right_positions), len(left_positions))
 
         visualizer = EEFVisualizer() if visualize_eef else None
 
@@ -189,78 +184,93 @@ class Simulator:
             pos_r = np.asarray(right_positions[frame], dtype=np.float32)
             pos_l = np.asarray(left_positions[frame], dtype=np.float32)
 
-            quat_r = np.asarray(right_quaternions[frame], dtype=np.float32)
-            quat_l = np.asarray(left_quaternions[frame], dtype=np.float32)
+            # H5 stores quaternions as wxyz; Lula/Isaac Sim expects xyzw — normalize on read
+            q_raw_r  = np.asarray(right_quaternions[frame], dtype=np.float32)
+            q_raw_l  = np.asarray(left_quaternions[frame],  dtype=np.float32)
+            quat_r   = np.array([q_raw_r[1], q_raw_r[2], q_raw_r[3], q_raw_r[0]], dtype=np.float32)
+            quat_r  /= np.linalg.norm(quat_r)
+            quat_l   = np.array([q_raw_l[1], q_raw_l[2], q_raw_l[3], q_raw_l[0]], dtype=np.float32)
+            quat_l  /= np.linalg.norm(quat_l)
 
-            # If your H5 quaternions are stored as [w, x, y, z], convert them:
-            # quat_r = np.array([quat_r[1], quat_r[2], quat_r[3], quat_r[0]], dtype=np.float32)
-            # quat_l = np.array([quat_l[1], quat_l[2], quat_l[3], quat_l[0]], dtype=np.float32)
+            # Other variants (uncomment and assign to cur_quat to use):
+            quat_r_flip = np.array([ quat_r[3],  quat_r[2], -quat_r[1], -quat_r[0]], dtype=np.float32)  # 180° flip around local X
+            quat_l_flip = np.array([ quat_l[3],  quat_l[2], -quat_l[1], -quat_l[0]], dtype=np.float32)
 
-            # Normalize for safety
-            if np.linalg.norm(quat_r) > 1e-8:
-                quat_r = quat_r / np.linalg.norm(quat_r)
-            if np.linalg.norm(quat_l) > 1e-8:
-                quat_l = quat_l / np.linalg.norm(quat_l)
-
-            # ===== Hand targets =====
-            q_hand_r = right_hand_q[frame]
-            q_hand_l = left_hand_q[frame]
-
-            if not np.isfinite(q_hand_r).all():
-                print(f"[frame {frame}] right hand has NaN/inf:", q_hand_r)
-                break
-
-            if not np.isfinite(q_hand_l).all():
-                print(f"[frame {frame}] left hand has NaN/inf:", q_hand_l)
-                break
-
-            hand_right.set_joint_positions(q_hand_r)
-            hand_left.set_joint_positions(q_hand_l)
+            # Active quaternion — change to any variant above
+            cur_quat_r = quat_r_flip
+            cur_quat_l = quat_l_flip
 
             # ===== Compute arm IK =====
-            joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
-                target_position=pos_r,
-                target_orientation=quat_r,
-            )
-            joint_action_l, ik_success_l = articulation_solver_l.compute_inverse_kinematics(
-                target_position=pos_l,
-                target_orientation=quat_l,
-            )
+            # ArticulationKinematicsSolver expects world-frame positions and handles
+            # the robot base transform internally — pass raw positions only.
+            ARM_JOINT_INDICES = list(range(7))
 
-            # ===== Apply arm joints =====
-            if set_joints:
-                if ik_success_r:
-                    q_r = np.asarray(joint_action_r.joint_positions, dtype=np.float32)
-                    arm_right.set_joint_positions(q_r)
-                else:
-                    ik_fail_r += 1
-                    print(f"[frame {frame}] IK failed RIGHT")
+            if enable_right:
+                joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
+                    target_position=pos_r,
+                    target_orientation=cur_quat_r,
+                )
+                if set_joints:
+                    if ik_success_r:
+                        arm_right.set_joint_positions(np.asarray(joint_action_r.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                    else:
+                        ik_fail_r += 1
+                        print(f"[frame {frame}] IK failed RIGHT")
 
-                if ik_success_l:
-                    q_l = np.asarray(joint_action_l.joint_positions, dtype=np.float32)
-                    arm_left.set_joint_positions(q_l)
-                else:
-                    ik_fail_l += 1
-                    print(f"[frame {frame}] IK failed LEFT")
-
-            # ===== Apply hand joints directly =====
-            ok_r = self._safe_set_joints(hand_right, q_hand_r, "RIGHT HAND") if set_joints else False
-            ok_l = self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")   if set_joints else False
+            if enable_left:
+                joint_action_l, ik_success_l = articulation_solver_l.compute_inverse_kinematics(
+                    target_position=pos_l,
+                    target_orientation=cur_quat_l,
+                )
+                if set_joints:
+                    if ik_success_l:
+                        arm_left.set_joint_positions(np.asarray(joint_action_l.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                    else:
+                        ik_fail_l += 1
+                        print(f"[frame {frame}] IK failed LEFT")
 
             # ===== EEF visualization =====
+            VIZ_OFFSET = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # 1 m up for unobstructed inspection
+
             if visualizer is not None:
-                visualizer.draw(pos_r, pos_l)
+                if enable_right:
+                    # Ground truth target frame — vivid
+                    visualizer.draw_frame(pos_r + base_pos_r, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                    # Actual robot EEF frame — faded
+                    act_pos_r_b, act_quat_wxyz_r_b = eef_prim_r.get_world_poses()
+                    act_quat_r = np.array([act_quat_wxyz_r_b[0,1], act_quat_wxyz_r_b[0,2], act_quat_wxyz_r_b[0,3], act_quat_wxyz_r_b[0,0]], dtype=np.float32)
+                    visualizer.draw_frame(act_pos_r_b[0], act_quat_r, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
+                    # Offset copies — same orientations, lifted 1 m; ground truth: half length, double width
+                    visualizer.draw_frame(pos_r + base_pos_r + VIZ_OFFSET, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
+                    visualizer.draw_frame(act_pos_r_b[0] + VIZ_OFFSET, act_quat_r, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
+                if enable_left:
+                    # Ground truth target frame — vivid
+                    visualizer.draw_frame(pos_l + base_pos_l, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                    # Actual robot EEF frame — faded
+                    act_pos_l_b, act_quat_wxyz_l_b = eef_prim_l.get_world_poses()
+                    act_quat_l = np.array([act_quat_wxyz_l_b[0,1], act_quat_wxyz_l_b[0,2], act_quat_wxyz_l_b[0,3], act_quat_wxyz_l_b[0,0]], dtype=np.float32)
+                    visualizer.draw_frame(act_pos_l_b[0], act_quat_l, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
+                    # Offset copies — same orientations, lifted 1 m; ground truth: half length, double width
+                    visualizer.draw_frame(pos_l + base_pos_l + VIZ_OFFSET, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
+                    visualizer.draw_frame(act_pos_l_b[0] + VIZ_OFFSET, act_quat_l, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
 
             if frame % 100 == 0:
                 print(f"\nframe {frame}/{n_frames}")
-                print("  pos_r       :", pos_r)
-                print("  quat_r      :", quat_r)
-                print("  pos_l       :", pos_l)
-                print("  quat_l      :", quat_l)
-                print("  hand_q_r[0:5]:", q_hand_r[:5])
-                print("  hand_q_l[0:5]:", q_hand_l[:5])
-                print(f"  hand set ok : right={ok_r}, left={ok_l}")
+                if enable_right:
+                    print("  pos_r         :", pos_r)
+                    print("  cur_quat_r    :", cur_quat_r)
+                if enable_left:
+                    print("  pos_l         :", pos_l)
+                    print("  cur_quat_l    :", cur_quat_l)
                 print(f"  IK fails    : right={ik_fail_r}, left={ik_fail_l}")
+                if visualizer is not None:
+                    # |dot| = 1.0 means perfect alignment, 0.0 means 90° off
+                    if enable_right:
+                        align_r = abs(float(np.dot(act_quat_r, cur_quat_r)))
+                        print(f"  EEF align r : {align_r:.4f}  (1.0=perfect)")
+                    if enable_left:
+                        align_l = abs(float(np.dot(act_quat_l, cur_quat_l)))
+                        print(f"  EEF align l : {align_l:.4f}  (1.0=perfect)")
 
             world.step(render=True)
             time.sleep(dt)
