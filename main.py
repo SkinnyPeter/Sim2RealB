@@ -7,7 +7,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 data_path = BASE_DIR / "data" / "20250827_151212.h5"
-scene_path = BASE_DIR / "scenes" / "scene.usd"
+scene_path = BASE_DIR / "scenes" / "scene_v3.usd"
 
 VISUALIZE_EEF = True   # draw EEF spheres (red = right, dark blue = left)
 SET_JOINTS    = False   # apply joint positions to arms and hands each frame
