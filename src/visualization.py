@@ -1,4 +1,14 @@
-from isaacsim.util.debug_draw import _debug_draw
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class VisConfig:
+    enabled: bool = True
+    show_eef: bool = True           # draw frames at EEF / target position
+    show_offset: bool = True        # draw frames lifted 1 m above (unobstructed view)
+    video_mode: bool = False        # preset: reduces faded alpha to 0.15 for screen recording
+    eef_alpha: Optional[float] = None  # explicit faded alpha; overrides video_mode if set
 
 
 # Colors as RGBA tuples in [0, 1]
@@ -26,6 +36,7 @@ ORIENT_LENGTH    = 0.1  # metres
 
 class EEFVisualizer:
     def __init__(self):
+        from isaacsim.util.debug_draw import _debug_draw
         self._draw = _debug_draw.acquire_debug_draw_interface()
 
     def draw_point(self, pos, color):

@@ -23,10 +23,11 @@ try:
 except ImportError:
     _CUROBO_AVAILABLE = False
 
-from pxr import UsdPhysics
+from pxr import Gf, UsdGeom, UsdPhysics
 
 from src.visualization import (
     EEFVisualizer,
+    VisConfig,
     COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z,
     COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED,
     ORIENT_LENGTH, FRAME_LINE_SIZE,
@@ -103,7 +104,13 @@ class Simulator:
         articulation.set_joint_positions(q_target)
         return True
 
-    def play(self, visualize_eef=False, set_joints=True, enable_right=True, enable_left=True, ik_solver="lula"):
+    def play(self, sim_config=None, vis_config=None):
+        # Unpack sim_config — accepts any object with these attributes
+        set_joints   = getattr(sim_config, "set_joints",   True)
+        enable_right = getattr(sim_config, "enable_right", True)
+        enable_left  = getattr(sim_config, "enable_left",  True)
+        ik_solver    = getattr(sim_config, "ik_solver",    "lula")
+        num_seeds    = getattr(sim_config, "num_seeds",    32)
         open_stage(self.stage_path)
         world = World()
 
@@ -167,13 +174,13 @@ class Simulator:
             ik_config = IKSolverConfig.load_from_robot_config(
                 RobotConfig.from_dict(franka_cfg, tensor_args=tensor_args),
                 tensor_args=tensor_args,
-                num_seeds=32,
+                num_seeds=num_seeds,
                 position_threshold=0.005,
                 rotation_threshold=0.05,
             )
             curobo_solver_r = IKSolver(ik_config)
             curobo_solver_l = IKSolver(ik_config)
-            print("curobo IK solver ready (num_seeds=32)")
+            print(f"curobo IK solver ready (num_seeds={num_seeds})")
             # Initialize seeds to franka home pose so CUDA graph is captured with non-None tensors
             # on frame 0 — subsequent frames update in-place (.copy_()) without breaking the graph.
             # Solver DOF=7 (fingers are locked in franka.yml, excluded from optimization).
@@ -202,7 +209,20 @@ class Simulator:
 
         n_frames = min(len(right_positions), len(left_positions))
 
-        visualizer = EEFVisualizer() if visualize_eef else None
+        if vis_config is None:
+            vis_config = VisConfig(enabled=False)
+        visualizer = EEFVisualizer() if vis_config.enabled else None
+
+        # Faded colors for actual-EEF frames — priority: eef_alpha > video_mode > default
+        if vis_config.eef_alpha is not None:
+            _a = vis_config.eef_alpha
+        elif vis_config.video_mode:
+            _a = 0.15
+        else:
+            _a = COLOR_AXIS_X_FADED[3]  # 0.35
+        cx_f = (COLOR_AXIS_X[0], COLOR_AXIS_X[1], COLOR_AXIS_X[2], _a)
+        cy_f = (COLOR_AXIS_Y[0], COLOR_AXIS_Y[1], COLOR_AXIS_Y[2], _a)
+        cz_f = (COLOR_AXIS_Z[0], COLOR_AXIS_Z[1], COLOR_AXIS_Z[2], _a)
 
         frame = 0
         ik_fail_r = 0
@@ -215,6 +235,13 @@ class Simulator:
 
         for _ in range(10):
             world.step(render=True)
+
+        # ===== Restore camera perspective (after warmup so viewport is ready) =====
+        _cam_eye    = getattr(sim_config, "camera_eye",    None)
+        _cam_target = getattr(sim_config, "camera_target", None)
+        if _cam_eye is not None and _cam_target is not None:
+            from isaacsim.core.utils.viewports import set_camera_view
+            set_camera_view(eye=np.array(_cam_eye), target=np.array(_cam_target))
 
         while self.app.is_running() and frame < n_frames:
             # ===== Arm targets =====
@@ -305,25 +332,23 @@ class Simulator:
 
             if visualizer is not None:
                 if enable_right:
-                    # Ground truth target frame — vivid
-                    visualizer.draw_frame(pos_r + base_pos_r, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
-                    # Actual robot EEF frame — faded
                     act_pos_r_b, act_quat_wxyz_r_b = eef_prim_r.get_world_poses()
                     act_quat_r = np.array([act_quat_wxyz_r_b[0,1], act_quat_wxyz_r_b[0,2], act_quat_wxyz_r_b[0,3], act_quat_wxyz_r_b[0,0]], dtype=np.float32)
-                    visualizer.draw_frame(act_pos_r_b[0], act_quat_r, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
-                    # Offset copies — same orientations, lifted 1 m; ground truth: half length, double width
-                    visualizer.draw_frame(pos_r + base_pos_r + VIZ_OFFSET, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
-                    visualizer.draw_frame(act_pos_r_b[0] + VIZ_OFFSET, act_quat_r, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
+                    if vis_config.show_eef:
+                        visualizer.draw_frame(pos_r + base_pos_r, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                        visualizer.draw_frame(act_pos_r_b[0], act_quat_r, cx_f, cy_f, cz_f)
+                    if vis_config.show_offset:
+                        visualizer.draw_frame(pos_r + base_pos_r + VIZ_OFFSET, cur_quat_r, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
+                        visualizer.draw_frame(act_pos_r_b[0] + VIZ_OFFSET, act_quat_r, cx_f, cy_f, cz_f)
                 if enable_left:
-                    # Ground truth target frame — vivid
-                    visualizer.draw_frame(pos_l + base_pos_l, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
-                    # Actual robot EEF frame — faded
                     act_pos_l_b, act_quat_wxyz_l_b = eef_prim_l.get_world_poses()
                     act_quat_l = np.array([act_quat_wxyz_l_b[0,1], act_quat_wxyz_l_b[0,2], act_quat_wxyz_l_b[0,3], act_quat_wxyz_l_b[0,0]], dtype=np.float32)
-                    visualizer.draw_frame(act_pos_l_b[0], act_quat_l, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
-                    # Offset copies — same orientations, lifted 1 m; ground truth: half length, double width
-                    visualizer.draw_frame(pos_l + base_pos_l + VIZ_OFFSET, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
-                    visualizer.draw_frame(act_pos_l_b[0] + VIZ_OFFSET, act_quat_l, COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED)
+                    if vis_config.show_eef:
+                        visualizer.draw_frame(pos_l + base_pos_l, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                        visualizer.draw_frame(act_pos_l_b[0], act_quat_l, cx_f, cy_f, cz_f)
+                    if vis_config.show_offset:
+                        visualizer.draw_frame(pos_l + base_pos_l + VIZ_OFFSET, cur_quat_l, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z, length=ORIENT_LENGTH * 0.5, width=FRAME_LINE_SIZE * 2)
+                        visualizer.draw_frame(act_pos_l_b[0] + VIZ_OFFSET, act_quat_l, cx_f, cy_f, cz_f)
 
             if frame % 100 == 0:
                 print(f"\nframe {frame}/{n_frames}")
