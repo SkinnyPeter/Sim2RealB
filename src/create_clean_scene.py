@@ -12,8 +12,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_SCENE = BASE_DIR / "scenes" / "scene.usd"
 FRANKA_USD = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd"
 
-ORCA_LEFT_USD = BASE_DIR / "assets" / "orca" / "scene_left" / "scene_left.usd"
-ORCA_RIGHT_USD = BASE_DIR / "assets" / "orca" / "scene_right" / "scene_right.usd"
+ORCA_LEFT_USD = BASE_DIR / "assets" / "usd" /"scene_left.usd"
+ORCA_RIGHT_USD = BASE_DIR / "assets" / "usd" / "scene_right.usd"
 
 
 from pxr import Usd
@@ -49,17 +49,16 @@ def set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1, 1, 1)):
     print(f"  rotateXYZ = {rotate_xyz}")
     print(f"  scale     = {scale}")
 
-def hide_prim(stage, prim_path):
+def deactivate_prim(stage, prim_path):
     """
-    Hide a given prim (prim_path) on a given stage
-
-    Used to hide the default panda hands
+    Deactivate a prim in the current edit target.
     """
     prim = stage.GetPrimAtPath(prim_path)
     if prim.IsValid():
-        imageable = UsdGeom.Imageable(prim)
-        imageable.MakeInvisible()
-        print(f"Hid prim: {prim_path}")
+        prim.SetActive(False)
+        print(f"Deactivated prim: {prim_path}")
+    else:
+        print(f"WARNING: prim not found for deactivation: {prim_path}")
 
 def create_table(stage, prim_path: str, translate, rotate_xyz, scale):
     prim = stage.DefinePrim(prim_path, "Cube")
@@ -128,26 +127,26 @@ def main():
     # Hide the original hands for both robots
     for side in ["left", "right"]:
             root = f"/World/Franka_{side}"
-            # We hide the visual geometry and the finger links
-            hide_prim(stage, f"{root}/panda_hand/geometry")
-            hide_prim(stage, f"{root}/panda_leftfinger")
-            hide_prim(stage, f"{root}/panda_rightfinger")
+            # These are not used in the manipulation
+            deactivate_prim(stage, f"{root}/panda_hand/geometry")
+            deactivate_prim(stage, f"{root}/panda_leftfinger")
+            deactivate_prim(stage, f"{root}/panda_rightfinger")
 
     # Attach ORCA
     if ORCA_LEFT_USD.exists():
-            path = "/World/Franka_left/panda_hand/ORCA_left"
+            path = "/World/Franka_left/ORCA_left" # TODO: Change this when we will have the connector
             prim = stage.DefinePrim(path, "Xform")
             prim.GetReferences().AddReference(str(ORCA_LEFT_USD))
             # Adjust transform if ORCA is misaligned with the wrist
-            set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(100,100,100))
+            set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1,1,1))
             print(f"ORCA RIGHT added successfully from: {ORCA_LEFT_USD}")
     else: print(f"WARNING: ORCA left USD not found: {ORCA_LEFT_USD}")
 
     if ORCA_RIGHT_USD.exists():
-        path = "/World/Franka_right/panda_hand/ORCA_right"
+        path = "/World/Franka_right/ORCA_right" # TODO: Change this when we will have the connector
         prim = stage.DefinePrim(path, "Xform")
         prim.GetReferences().AddReference(str(ORCA_RIGHT_USD))
-        set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(100,100,100))
+        set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1,1,1))
         print(f"ORCA RIGHT added successfully from: {ORCA_RIGHT_USD}")
     else: print(f"WARNING: ORCA right USD not found: {ORCA_RIGHT_USD}")
 
