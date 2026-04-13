@@ -19,7 +19,7 @@ class SimConfig:
 # Directory where main.py is located
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "20250827_151212.h5"
+data_path = BASE_DIR / "data" / "20250826_111157.h5"
 scene_path = BASE_DIR / "scenes" / "scene_v4.usd"
 
 SIM = SimConfig(
@@ -57,9 +57,9 @@ def main():
     # # Create an analyzer with the default file path
     # analyzer = H5Analyzer(data_path)
 
-    # # Use the inspect() method
-    # print("Inspecting HDF5 file...")
-    # analyzer.inspect()
+    # Use the inspect() method
+    #print("Inspecting HDF5 file...")
+    #analyzer.inspect()
 
     # # Use the play_video() method
     # print("\nPlaying video from HDF5 file...") 

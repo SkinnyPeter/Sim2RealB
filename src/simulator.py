@@ -131,6 +131,15 @@ class Simulator:
             SingleArticulation("/World/Franka_left", name="franka_left")
         )
 
+        hand_right = world.scene.add(
+            SingleArticulation("/World/Franka_right/panda_hand/ORCA_right", name="orca_right")
+        )
+
+        hand_left = world.scene.add(
+            SingleArticulation("/World/Franka_left/panda_hand/ORCA_left", name="orca_left")
+        )
+        
+
         world.reset()
 
         # ===== Arm base positions in world frame =====
