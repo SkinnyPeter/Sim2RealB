@@ -41,7 +41,7 @@ def main():
     from src.simulator import Simulator
 
     simulator = Simulator(simulation_app, scene_path,data_path)
-    simulator.play_one_hand()
+    simulator.play()
 
     simulation_app.close()
 

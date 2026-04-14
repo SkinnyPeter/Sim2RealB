@@ -32,7 +32,6 @@ def add_reference(stage, prim_path: str, asset_path: str, prim_type: str = "Xfor
     print(f"Added reference: {prim_path} -> {asset_path}")
     return prim
 
-
 def set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1, 1, 1)):
     xform = UsdGeom.Xformable(prim)
     xform.ClearXformOpOrder()
@@ -54,12 +53,23 @@ def deactivate_prim(stage, prim_path):
     """
     Deactivate a prim in the current edit target.
     """
+
+    print("Had many bugs with this one, use hide_prim_visual if possible")
+
     prim = stage.GetPrimAtPath(prim_path)
     if prim.IsValid():
         prim.SetActive(False)
         print(f"Deactivated prim: {prim_path}")
     else:
         print(f"WARNING: prim not found for deactivation: {prim_path}")
+
+def hide_prim_visual(stage, prim_path):
+    prim = stage.GetPrimAtPath(prim_path)
+    if prim and prim.IsValid():
+        imageable = UsdGeom.Imageable(prim)
+        if imageable:
+            imageable.MakeInvisible()
+            print(f"Hidden prim: {prim_path}")
 
 def create_table(stage, prim_path: str, translate, rotate_xyz, scale):
     prim = stage.DefinePrim(prim_path, "Cube")
@@ -128,9 +138,9 @@ def main():
     for side in ["left", "right"]:
             root = f"/World/Franka_{side}"
             # These are not used in the manipulation
-            deactivate_prim(stage, f"{root}/panda_hand/geometry")
-            deactivate_prim(stage, f"{root}/panda_leftfinger")
-            deactivate_prim(stage, f"{root}/panda_rightfinger")
+            # deactivate_prim(stage, f"{root}/panda_hand/geometry") # TODO: panda_hand is not the actual EEF - Once the actual EEF is hide panda_hand
+            hide_prim_visual(stage, f"{root}/panda_leftfinger")
+            hide_prim_visual(stage, f"{root}/panda_rightfinger")
 
     # Attach ORCA
     if ORCA_LEFT_USD.exists():
