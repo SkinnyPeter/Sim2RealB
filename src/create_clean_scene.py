@@ -12,9 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_SCENE = BASE_DIR / "scenes" / "scene.usd"
 FRANKA_USD = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd"
 
-ORCA_LEFT_USD = BASE_DIR / "assets" / "usd" /"scene_left.usd"
-ORCA_RIGHT_USD = BASE_DIR / "assets" / "usd" / "scene_right.usd"
+ORCA_LEFT_USD = BASE_DIR / "assets" / "hands_usd" /"scene_left.usd"
+ORCA_RIGHT_USD = BASE_DIR / "assets" / "hands_usd" / "scene_right.usd"
 
+OBJECT_USD = BASE_DIR / "assets" / "obj" / "rubber_duck.usd"
 
 from pxr import Usd
 
@@ -64,7 +65,6 @@ def create_table(stage, prim_path: str, translate, rotate_xyz, scale):
     prim = stage.DefinePrim(prim_path, "Cube")
     set_xform(prim, translate=translate, rotate_xyz=rotate_xyz, scale=scale)
     return prim
-
 
 def add_orca_under_hand(
     stage,
@@ -134,7 +134,7 @@ def main():
 
     # Attach ORCA
     if ORCA_LEFT_USD.exists():
-            path = "/World/Franka_left/ORCA_left" # TODO: Change this when we will have the connector
+            path = "/World/ORCA_left" # TODO: Change this when we will have the connector
             prim = stage.DefinePrim(path, "Xform")
             prim.GetReferences().AddReference(str(ORCA_LEFT_USD))
             # Adjust transform if ORCA is misaligned with the wrist
@@ -143,7 +143,7 @@ def main():
     else: print(f"WARNING: ORCA left USD not found: {ORCA_LEFT_USD}")
 
     if ORCA_RIGHT_USD.exists():
-        path = "/World/Franka_right/ORCA_right" # TODO: Change this when we will have the connector
+        path = "/World/ORCA_right" # TODO: Change this when we will have the connector
         prim = stage.DefinePrim(path, "Xform")
         prim.GetReferences().AddReference(str(ORCA_RIGHT_USD))
         set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1,1,1))
@@ -166,6 +166,15 @@ def main():
         rotate_xyz=(0.0, 0.0, 0.0),
         scale=(0.5, 0.35, 0.02),
     )
+
+    # Load object (rubber duck)
+    if OBJECT_USD.exists():
+        path = "/World/object"
+        prim = stage.DefinePrim(path, "Xform")
+        prim.GetReferences().AddReference(str(OBJECT_USD))
+        set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(0.001,0.001,0.001))
+        print(f"OBJECT added successfully from: {OBJECT_USD}")
+    else: print(f"WARNING: OBJECT USD not found: {OBJECT_USD}")
 
     # Let Franka references resolve before authoring under panda_hand
     for _ in range(30):

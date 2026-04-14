@@ -7,12 +7,14 @@ from isaacsim.robot_motion.motion_generation import (
 )
 
 import omni.usd
-import h5py
 import numpy as np
 import time
 from pathlib import Path
 
 from pxr import UsdPhysics
+
+# For debugging purposes
+DEBUG = True
 
 ISAACSIM_ROOT = Path.home() / "isaac-sim"
 
@@ -43,6 +45,9 @@ class Simulator:
         self.h5_path = str(h5_path)
 
     def inspect(self):
+        """
+        Output the stage content of the scene
+        """
         open_stage(self.stage_path)
         stage = omni.usd.get_context().get_stage()
 
@@ -55,6 +60,9 @@ class Simulator:
             print(prim.GetPath())
 
     def _print_articulation_info(self, articulation, label):
+        """
+        Prints DOF and their names
+        """
         try:
             dof_names = articulation.dof_names
         except Exception:
@@ -67,6 +75,9 @@ class Simulator:
             print(f"  [{i:02d}] {name}")
 
     def _safe_set_joints(self, articulation, q_target, label):
+        """
+        Set joints to q_target
+        """
         q_target = np.asarray(q_target, dtype=np.float32).reshape(-1)
 
         try:
@@ -82,19 +93,76 @@ class Simulator:
 
         articulation.set_joint_positions(q_target)
         return True
+    
+    def play_one_hand(self):
+        """
+        Minimal play method for debug purposes
+        """
+        import h5py
+        # ===== Load dataset =====
+        with h5py.File(self.h5_path, "r") as f:
+            left_hand_q  = np.array(f["observations/qpos_hand_left"], dtype=np.float32)
 
-    def play(self):
+        dt = 1.0 # Set at your preference
+
         open_stage(self.stage_path)
         world = World()
-
-        ####
         stage = omni.usd.get_context().get_stage()
 
         print("=== Articulation roots in stage ===")
         for prim in stage.Traverse():
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 print(prim.GetPath())
-        ####
+
+        # Deactivate everything except one ORCA candidate
+        for path in [
+            "/World/Franka_left",
+            "/World/Franka_right",
+            "/World/ORCA_right",
+            "/World/object"
+        ]:
+            prim = stage.GetPrimAtPath(path)
+            if prim and prim.IsValid():
+                prim.SetActive(False)
+                print(f"Deactivated {path}")
+
+        hand_left_path = "/World/ORCA_left/scene_left/left_root/left_root"
+
+        hand_left = world.scene.add(
+            SingleArticulation(hand_left_path, name="test_art")
+        )
+
+        world.reset()
+        world.play()
+
+        for _ in range(5):
+            world.step(render=True)
+
+        self._print_articulation_info(hand_left, "TEST ARTICULATION")
+
+        frame = 0
+        while self.app.is_running() and frame < len(left_hand_q):
+            q_hand_l = left_hand_q[frame] # Hand target
+            if not np.isfinite(q_hand_l).all():
+                print(f"[frame {frame}] left hand has NaN/inf:", q_hand_l)
+                break
+            self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")
+            world.step(render=True)
+            time.sleep(dt)
+            frame += 1
+
+    def play(self):
+        import h5py
+        open_stage(self.stage_path)
+        world = World()
+
+        stage = omni.usd.get_context().get_stage()
+
+        if DEBUG:
+            print("=== Articulation roots in stage ===")
+            for prim in stage.Traverse():
+                if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+                    print(prim.GetPath())
 
         # ===== Robots from stage =====
         arm_right = world.scene.add(
@@ -105,21 +173,22 @@ class Simulator:
         )
 
         hand_right = world.scene.add(
-            SingleArticulation("/World/Franka_right/panda_hand/ORCA_right", name="orca_right")
+            SingleArticulation("/World/ORCA_right/scene_right/right_root/right_root", name="orca_right")
         )
 
         hand_left = world.scene.add(
-            SingleArticulation("/World/Franka_left/panda_hand/ORCA_left", name="orca_left")
+            SingleArticulation("/World/ORCA_left/scene_left/left_root/left_root", name="orca_left")
         )
         
 
         world.reset()
 
         # ===== Print DOF order once =====
-        self._print_articulation_info(arm_right, "RIGHT ARM")
-        self._print_articulation_info(arm_left, "LEFT ARM")
-        self._print_articulation_info(hand_right, "RIGHT HAND")
-        self._print_articulation_info(hand_left, "LEFT HAND")
+        if DEBUG:
+            self._print_articulation_info(arm_right, "RIGHT ARM")
+            self._print_articulation_info(arm_left, "LEFT ARM")
+            self._print_articulation_info(hand_right, "RIGHT HAND")
+            self._print_articulation_info(hand_left, "LEFT HAND")
 
         # ===== IK solvers for arms =====
         kin_solver_r = LulaKinematicsSolver(
@@ -149,14 +218,14 @@ class Simulator:
             right_hand_q = np.array(f["observations/qpos_hand_right"], dtype=np.float32)
             left_hand_q  = np.array(f["observations/qpos_hand_left"], dtype=np.float32)
 
-        print("\n===== H5 DATA =====")
-        print("right_arm_data shape :", right_arm_data.shape)
-        print("left_arm_data shape  :", left_arm_data.shape)
-        print("right_hand_q shape   :", right_hand_q.shape)
-        print("left_hand_q shape    :", left_hand_q.shape)
+        if DEBUG:
+            print("\n===== H5 DATA =====")
+            print("right_arm_data shape :", right_arm_data.shape)
+            print("left_arm_data shape  :", left_arm_data.shape)
+            print("right_hand_q shape   :", right_hand_q.shape)
+            print("left_hand_q shape    :", left_hand_q.shape)
 
         # Assuming arm data is [px, py, pz, qx, qy, qz, qw] or similar pose representation.
-        # Verify this. If this is actually joint-space, do NOT use IK.
         right_positions = right_arm_data[:, 0:3]
         left_positions = left_arm_data[:, 0:3]
 
@@ -211,11 +280,12 @@ class Simulator:
             if not np.isfinite(q_hand_l).all():
                 print(f"[frame {frame}] left hand has NaN/inf:", q_hand_l)
                 break
-
+            
             hand_right.set_joint_positions(q_hand_r)
             hand_left.set_joint_positions(q_hand_l)
 
             # ===== Compute arm IK =====
+            """
             joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
                 target_position=pos_r,
                 target_orientation=quat_r,
@@ -239,12 +309,12 @@ class Simulator:
             else:
                 ik_fail_l += 1
                 print(f"[frame {frame}] IK failed LEFT")
-
+"""
             # ===== Apply hand joints directly =====
             ok_r = self._safe_set_joints(hand_right, q_hand_r, "RIGHT HAND")
             ok_l = self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")
 
-            if frame % 100 == 0:
+            if DEBUG and frame % 100 == 0:
                 print(f"\nframe {frame}/{n_frames}")
                 print("  pos_r       :", pos_r)
                 print("  quat_r      :", quat_r)
