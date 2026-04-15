@@ -16,7 +16,7 @@ import omni.timeline
 
 # ── Configuration ────────────────────────────────────────────────────────────
 TRAJECTORY_NPY = "/home/teamb/Desktop/Sim2RealB/data/trajectory.npy"
-PRIM_PATH      = "/World/duck"   # USD path of the mesh prim to animate
+PRIM_PATH      = "/home/teamb/Desktop/Sim2RealB/assets/obj/rubber_duck.obj"   # USD path of the mesh prim to animate
 TIME_CODES_PER_FRAME = 1         # increase if your stage runs at e.g. 60 fps
 # ─────────────────────────────────────────────────────────────────────────────
 
