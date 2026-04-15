@@ -25,7 +25,13 @@ FRANKA_USD = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/As
 ORCA_LEFT_USD = BASE_DIR / "assets" / "hands_usd" /"scene_left.usd"
 ORCA_RIGHT_USD = BASE_DIR / "assets" / "hands_usd" / "scene_right.usd"
 
-OBJECT_USD = BASE_DIR / "assets" / "obj" / "rubber_duck.usd"
+# Objects path
+DUCK_USD = BASE_DIR / "assets" / "obj" / "rubber_duck.usd"
+BALL_USD = BASE_DIR / "assets" / "obj" / "ball.usd"
+
+# Object selected
+OBJECT_USD = DUCK_USD
+
 
 ARIA_INTRINSICS = np.array([
     [133.25430222 * 2, 0.0, 320, 0],
@@ -53,6 +59,23 @@ best_calib = {
         [ 0.        ,  0.        ,  0.        ,  1.        ]
     ])
 }
+
+T_base_left_world = np.array([
+    [1.0, 0.0, 0.0, -0.25],
+    [0.0, 1.0, 0.0,  0.35],
+    [0.0, 0.0, 1.0,  0.77],
+    [0.0, 0.0, 0.0,  1.0],
+])
+
+T_base_right_world = np.array([
+    [1.0, 0.0, 0.0, -0.25],
+    [0.0, 1.0, 0.0, -0.35],
+    [0.0, 0.0, 1.0,  0.77],
+    [0.0, 0.0, 0.0,  1.0],
+])
+
+T_cam_left_world = T_base_left_world @ best_calib["left_cam"]
+T_cam_right_world = T_base_right_world @ best_calib["right_cam"]
 
 from pxr import Usd
 
@@ -157,11 +180,64 @@ def set_xform_from_matrix(prim, T):
         )
     )
 
+def _rotation_matrix_to_euler_xyz_deg(R):
+    """
+    Decompose rotation matrix for rotateXYZ convention.
+    Returns angles in degrees.
+    """
+    ry = np.arcsin(np.clip(R[0, 2], -1.0, 1.0))
+    cy = np.cos(ry)
+
+    if abs(cy) > 1e-8:
+        rx = np.arctan2(-R[1, 2], R[2, 2])
+        rz = np.arctan2(-R[0, 1], R[0, 0])
+    else:
+        # gimbal lock
+        rx = np.arctan2(R[2, 1], R[1, 1])
+        rz = 0.0
+
+    return np.degrees([rx, ry, rz])
+
+def _decompose_matrix_xyz(T):
+    """
+    Decompose a 4x4 transform matrix into translation, rotate_xyz, scale
+    for use with set_xform().
+    """
+    T = np.asarray(T, dtype=np.float64)
+    if T.shape != (4, 4):
+        raise ValueError(f"Expected (4,4), got {T.shape}")
+
+    # translation
+    translate = T[:3, 3].copy()
+
+    # extract 3x3 linear part
+    M = T[:3, :3].copy()
+
+    # scale = norm of columns
+    sx = np.linalg.norm(M[:, 0])
+    sy = np.linalg.norm(M[:, 1])
+    sz = np.linalg.norm(M[:, 2])
+    scale = np.array([sx, sy, sz], dtype=np.float64)
+
+    # avoid division by zero
+    if np.any(scale < 1e-12):
+        raise ValueError(f"Degenerate scale in matrix: {scale}")
+
+    # normalized rotation
+    R = M.copy()
+    R[:, 0] /= sx
+    R[:, 1] /= sy
+    R[:, 2] /= sz
+
+    rotate_xyz = _rotation_matrix_to_euler_xyz_deg(R)
+
+    return tuple(translate), tuple(rotate_xyz.T), tuple(scale)
+
 def add_camera(
     stage,
     prim_path: str,
     intrinsics: np.ndarray,
-    extrinsic_cam_to_parent: np.ndarray,
+    T_cam_world,
     image_size=(640, 480),
     clipping_range=(0.01, 100.0),
     horizontal_aperture_mm=20.955,
@@ -195,9 +271,9 @@ def add_camera(
     if intrinsics.shape not in [(3, 3), (3, 4)]:
         raise ValueError(f"Expected intrinsics shape (3,3) or (3,4), got {intrinsics.shape}")
 
-    T = np.asarray(extrinsic_cam_to_parent, dtype=np.float64)
-    if T.shape != (4, 4):
-        raise ValueError(f"Expected extrinsic shape (4,4), got {T.shape}")
+    T_cam_world = np.asarray(T_cam_world, dtype=np.float64)
+    if T_cam_world.shape != (4, 4):
+        raise ValueError(f"Expected extrinsic shape (4,4), got {T_cam_world.shape}")
 
     width, height = image_size
     fx = float(intrinsics[0, 0])
@@ -209,9 +285,39 @@ def add_camera(
     camera = UsdGeom.Camera.Define(stage, prim_path)
     prim = camera.GetPrim()
 
-    # Pose
-    set_xform_from_matrix(prim, T)
+    T = np.array(T_cam_world, dtype=np.float64)
 
+    # Extract translation
+    t = T[:3, 3].copy()
+
+    # Extract rotation
+    R = T[:3, :3].copy()
+
+    # Fixed conversion from common CV camera frame
+    # (x right, y down, z forward)
+    # to USD camera frame
+    R_fix = np.diag([1.0, -1.0, -1.0])
+
+    R_roll = np.array([
+    [0.0, -1.0, 0.0],
+    [1.0,  0.0, 0.0],
+    [0.0,  0.0, 1.0],
+])
+
+    R_usd = R @ R_fix @ R_roll
+
+    # Convert to Euler XYZ degrees
+    rot_xyz = _rotation_matrix_to_euler_xyz_deg(R_usd)
+
+    # TODO: There is still one last rotation to apply to get a landscape view
+    
+    # Pose
+    set_xform(
+        prim,
+        translate=tuple(t),
+        rotate_xyz=tuple(rot_xyz),
+        scale=(1.0,1.0,1.0),
+    )
     # Convert pixel intrinsics -> USD camera parameters
     #
     # USD relation:
@@ -346,7 +452,7 @@ def main():
         stage,
         "/World/left_cam",
         intrinsics=ARIA_INTRINSICS,
-        extrinsic_cam_to_parent=best_calib["left_cam"],
+        T_cam_world=T_cam_left_world,
         image_size=(640, 480),
     )
 
@@ -355,7 +461,7 @@ def main():
         stage,
         "/World/right_cam",
         intrinsics=ARIA_INTRINSICS,
-        extrinsic_cam_to_parent=best_calib["right_cam"],
+        T_cam_world=T_cam_right_world,
         image_size=(640, 480),
     )
     # Let Franka references resolve before authoring under panda_hand

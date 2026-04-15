@@ -188,12 +188,14 @@ class Simulator:
             frame += 1
 
     def play(self, sim_config=None, vis_config=None):
+        """
+        Play the entire simulation
+        """
         import h5py
 
         set_joints = getattr(sim_config, "set_joints", True)
         enable_right = getattr(sim_config, "enable_right", True)
         enable_left = getattr(sim_config, "enable_left", True)
-        ik_solver = getattr(sim_config, "ik_solver", "lula")
         num_seeds = getattr(sim_config, "num_seeds", 32)
 
         open_stage(self.stage_path)
