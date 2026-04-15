@@ -1,3 +1,4 @@
+# Place all isaasim related imports here (need to be imported first)
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
@@ -5,7 +6,9 @@ from isaacsim.robot_motion.motion_generation import (
     ArticulationKinematicsSolver,
     LulaKinematicsSolver,
 )
+import isaacsim.robot_motion.motion_generation as _mg_pkg
 
+# Place all imports external to isaac here
 try:
     import omni.usd
     import numpy as np
@@ -43,8 +46,6 @@ from src.visualization import (
     FRAME_LINE_SIZE,
 )
 
-import isaacsim.robot_motion.motion_generation as _mg_pkg
-
 _MOTION_GEN_EXT = Path(_mg_pkg.__file__).parents[3]
 
 PANDA_ARM_DESCRIPTION_PATH = str(
@@ -54,6 +55,10 @@ PANDA_ARM_DESCRIPTION_PATH = str(
 PANDA_ARM_URDF_PATH = str(
     _MOTION_GEN_EXT / "motion_policy_configs" / "franka" / "lula_franka_gen.urdf"
 )
+
+# Translation vector flange to EEF
+# The flange is the ring at the end of panda_link7 where the mount is attached using the 4 screw holes
+T_flange_EEF = np.array([0.13,0,0.07])
 
 
 class Simulator:
@@ -229,8 +234,10 @@ class Simulator:
                 self._print_articulation_info(hand_left, "LEFT HAND")
 
         # ===== Arm base positions in world frame =====
-        base_pos_r, _ = arm_right.get_world_pose()
-        base_pos_l, _ = arm_left.get_world_pose()
+        # The initial EEF position after the scene is created, it needs to be translated by T_flange_EEF
+        # This is only used for visualization purposes
+        base_pos_r, _ = arm_right.get_world_pose() + T_flange_EEF
+        base_pos_l, _ = arm_left.get_world_pose() + T_flange_EEF
 
         # ===== EEF prim handles for actual pose readback =====
         # TODO: panda_hand is not the actual EEF - change this and also the create_clean_scene so it deactivate panda_hand
@@ -323,6 +330,7 @@ class Simulator:
 
         # Simulation loop
         while self.app.is_running() and frame < n_frames:
+            # EEF position
             pos_r = np.asarray(right_positions[frame], dtype=np.float32)
             pos_l = np.asarray(left_positions[frame], dtype=np.float32)
 
@@ -370,13 +378,20 @@ class Simulator:
 
             # Curobo IK Solver
             if enable_right:
+                # Convert EEF Numpy into Torch so its on the same device
+                T_flange_EEF_t = torch.tensor(
+                    T_flange_EEF, dtype=torch.float32, device=_dev
+                )
+                # Goal EEF position / quats
+                pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev) - T_flange_EEF_t
                 quat_wxyz_r = torch.tensor(
                     [[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]],
                     dtype=torch.float32,
                     device=_dev,
                 )
-                pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev)
                 goal_r = CuroboPose(position=pos_t_r, quaternion=quat_wxyz_r)
+
+                #
                 result_r = curobo_solver_r.solve_single(
                     goal_r,
                     retract_config=prev_retract_r,
@@ -396,7 +411,7 @@ class Simulator:
                     else:
                         ik_fail_r += 1
                         print(f"[frame {frame}] IK failed RIGHT")
-
+            # TODO: the solver need to take the EEF position - T_flange_EEF
             if enable_left:
                 quat_wxyz_l = torch.tensor(
                     [[cur_quat_l[3], cur_quat_l[0], cur_quat_l[1], cur_quat_l[2]]],

@@ -16,7 +16,9 @@ from src.h5_analyzer import H5Analyzer
 VIDEO = False # TODO: I had a bug with cv2 on my laptop (Mathieu talking)
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "20250826_111157.h5"
+
+# /object_in_bowl_processed_50hz.20250804_175047.h5
+data_path = BASE_DIR / "data" / "20250804_175047.h5" # This one is from object_in_bowl_processed_50hz
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 data_path = str(data_path)
