@@ -9,6 +9,7 @@ import numpy as np
 import time
 import os
 from pathlib import Path
+from scipy.spatial.transform import Rotation
 
 from src.visualization import (
     EEFVisualizer,
@@ -21,6 +22,14 @@ from src.visualization import (
     FRAME_LINE_SIZE,
 )
 
+
+# OpenCV (Y-down, Z-forward) -> Isaac Sim / USD (Y-up, Z-backward)
+CV2USD = np.array([
+    [1,  0,  0,  0],
+    [0, -1,  0,  0],
+    [0,  0, -1,  0],
+    [0,  0,  0,  1],
+], dtype=np.float64)
 
 FRANKA_RIGHT_PATH = "/World/fer_orcahand_right_extended"
 FRANKA_LEFT_PATH = "/World/fer_orcahand_left_extended"
@@ -286,6 +295,22 @@ class Simulator:
         if left_hand_data is not None:
             n_frames = min(n_frames, len(left_hand_data))
 
+        # Object trajectory (.npy of shape (N, 4, 4), ob_in_cam, OpenCV convention)
+        object_traj = None
+        obj_prim = None
+        trajectory_npy = getattr(sim_config, "trajectory_npy", None)
+        object_prim_path = getattr(sim_config, "object_prim_path", "/World/rubber_duck")
+        if trajectory_npy and Path(trajectory_npy).exists():
+            object_traj = np.load(trajectory_npy)  # (N, 4, 4)
+            n_frames = min(n_frames, len(object_traj))
+            obj_prim = XFormPrim(object_prim_path)
+            print(f"\n===== OBJECT TRAJECTORY =====")
+            print(f"trajectory : {trajectory_npy}")
+            print(f"shape      : {object_traj.shape}")
+            print(f"prim       : {object_prim_path}")
+        elif trajectory_npy:
+            print(f"WARNING: trajectory_npy not found: {trajectory_npy}")
+
         if vis_config is None:
             vis_config = VisConfig(enabled=False)
         visualizer = EEFVisualizer() if vis_config.enabled else None
@@ -381,6 +406,14 @@ class Simulator:
                         )
                 if set_joints:
                     arm_left.set_joint_positions(q_full_l)
+
+            # Object trajectory replay
+            if obj_prim is not None:
+                ob_in_usd = CV2USD @ object_traj[frame]
+                t = ob_in_usd[:3, 3].astype(np.float32)
+                q_xyzw = Rotation.from_matrix(ob_in_usd[:3, :3]).as_quat()
+                q_wxyz = np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=np.float32)
+                obj_prim.set_world_pose(position=t, orientation=q_wxyz)
 
             viz_offset = np.array([0.0, 0.0, 1.0], dtype=np.float32)
             if visualizer is not None:
