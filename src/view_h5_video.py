@@ -25,7 +25,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-DATA_DIR = Path.home() / "Desktop" / "data"
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
 
 CAMERA_KEYS = [
     "observations/images/aria_rgb_cam/color",
