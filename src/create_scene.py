@@ -35,12 +35,23 @@ R1 = (36.244522, 2.155732, -91.261346)
 T2 = (-0.074849, -0.003505, 1.238954)
 R2 = (33.763158, 4.545887, -88.313427)
 
+ARIA_INTRINSICS = np.array([
+    [133.25430222 * 2, 0.0, 320, 0],
+    [0.0, 133.25430222 * 2, 240, 0],
+    [0.0, 0.0, 1.0, 0]
+])
+
+ARIA_INTRINSICS_HALF = np.array([
+    [133.25430222, 0.0, 320 / 2, 0],
+    [0.0, 133.25430222, 240 / 2, 0],
+    [0.0, 0.0, 1.0, 0],
+])
+
 def add_reference(stage, prim_path: str, asset_path: Path):
     prim = stage.DefinePrim(prim_path, "Xform")
     prim.GetReferences().AddReference(str(asset_path))
     print(f"Added reference: {prim_path} -> {asset_path}")
     return prim
-
 
 def set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1, 1, 1)):
     xform = UsdGeom.Xformable(prim)
@@ -64,7 +75,6 @@ def set_xform_from_matrix(prim, T):
         )
     )
 
-
 def create_table(stage, prim_path: str, translate, scale):
     prim = stage.DefinePrim(prim_path, "Cube")
     UsdPhysics.CollisionAPI.Apply(prim)
@@ -72,13 +82,11 @@ def create_table(stage, prim_path: str, translate, scale):
     print(f"Table created: {prim_path}")
     return prim
 
-
-def add_camera(stage, prim_path, intrinsics, extrinsic_cam_to_parent,
-               image_size=(640, 480), clipping_range=(0.01, 100.0),
-               horizontal_aperture_mm=20.955):
-    """Add a calibrated pinhole camera from intrinsics + extrinsic 4×4 matrix."""
+def add_camera(stage, prim_path: str, intrinsics: np.ndarray, translate, rotate_xyz=(0, 0, 0), image_size=(640, 480), clipping_range=(0.01, 100.0), horizontal_aperture_mm=20.955,):
+    """Overhead camera"""
     intrinsics = np.asarray(intrinsics, dtype=np.float64)
-    T = np.asarray(extrinsic_cam_to_parent, dtype=np.float64)
+    if intrinsics.shape not in [(3, 3), (3, 4)]:
+        raise ValueError(f"Expected intrinsics shape (3,3) or (3,4), got {intrinsics.shape}")
 
     width, height = image_size
     fx = float(intrinsics[0, 0])
@@ -86,26 +94,27 @@ def add_camera(stage, prim_path, intrinsics, extrinsic_cam_to_parent,
     cx = float(intrinsics[0, 2])
     cy = float(intrinsics[1, 2])
 
-    cam = UsdGeom.Camera.Define(stage, prim_path)
-    set_xform_from_matrix(cam.GetPrim(), T)
-
-    focal_length_mm      = fx * horizontal_aperture_mm / width
+    focal_length_mm = fx * horizontal_aperture_mm / width
     vertical_aperture_mm = horizontal_aperture_mm * height / width
-    horiz_offset_mm      = (cx - width  / 2.0) * horizontal_aperture_mm / width
-    vert_offset_mm       = (cy - height / 2.0) * vertical_aperture_mm   / height
 
+
+    # Principal point offsets from image center - USD offsets are in mm on the sensor plane.
+    horiz_offset_mm = (cx - width / 2.0) * horizontal_aperture_mm / width
+    vert_offset_mm = (cy - height / 2.0) * vertical_aperture_mm / height
+
+    cam = UsdGeom.Camera.Define(stage, prim_path)
+    xform = UsdGeom.Xformable(cam)
+    xform.AddTranslateOp(opSuffix="scene").Set(Gf.Vec3d(*translate))
+    xform.AddRotateXYZOp(opSuffix="scene").Set(Gf.Vec3f(*rotate_xyz))
     cam.CreateHorizontalApertureAttr(horizontal_aperture_mm)
     cam.CreateVerticalApertureAttr(vertical_aperture_mm)
     cam.CreateFocalLengthAttr(focal_length_mm)
     cam.CreateClippingRangeAttr(Gf.Vec2f(*clipping_range))
     cam.CreateHorizontalApertureOffsetAttr(horiz_offset_mm)
     cam.CreateVerticalApertureOffsetAttr(vert_offset_mm)
-    cam.GetPrim().CreateAttribute("camera:imageWidth",  Sdf.ValueTypeNames.Int).Set(width)
-    cam.GetPrim().CreateAttribute("camera:imageHeight", Sdf.ValueTypeNames.Int).Set(height)
 
-    print(f"Camera created: {prim_path}  fx={fx:.1f} fy={fy:.1f}")
+    print(f"Camera created: {prim_path}  translate={translate}")
     return cam
-
 
 def main():
     ctx = omni.usd.get_context()
@@ -139,14 +148,6 @@ def main():
     dome.CreateIntensityAttr(1000.0)
     dome.CreateColorAttr(Gf.Vec3f(1.0, 0.98, 0.95))
 
-    # ── CAMERAS (calibrated from physical lab) ─────────────────────────────
-    add_camera(stage, "/World/left_cam",
-               intrinsics=ARIA_INTRINSICS,
-               extrinsic_cam_to_parent=CAMERA_EXTRINSICS["left_cam"])
-    add_camera(stage, "/World/right_cam",
-               intrinsics=ARIA_INTRINSICS,
-               extrinsic_cam_to_parent=CAMERA_EXTRINSICS["right_cam"])
-
     # ── LEFT SIDE ──────────────────────────────────────────────────────────
     create_table(
         stage, "/World/table_left",
@@ -156,10 +157,10 @@ def main():
     # Overhead camera above the left table, looking straight down
     add_camera(
         stage, "/World/camera_left",
+        intrinsics=ARIA_INTRINSICS,
         translate=T1,
         rotate_xyz=R1
     )
-
 
     # Robot
     if LEFT_ROBOT_USD.exists():
@@ -177,6 +178,7 @@ def main():
     )
     add_camera(
         stage, "/World/camera_right",
+        intrinsics=ARIA_INTRINSICS,
         translate=T2,
         rotate_xyz=R2
     )
