@@ -1,0 +1,8 @@
+cd /home/teamb/Desktop/Real2Sim
+~/isaac-sim/python.sh main.py
+
+cd /home/teamb/Desktop/Real2Sim
+~/isaac-sim/python.sh src/create_scene.py
+
+cd ~/isaac-sim
+./isaac-sim.sh

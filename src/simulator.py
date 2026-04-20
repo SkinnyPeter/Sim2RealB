@@ -1,0 +1,466 @@
+from isaacsim.core.utils.stage import open_stage
+from isaacsim.core.api import World
+from isaacsim.core.prims import SingleArticulation, XFormPrim
+from isaacsim.robot_motion.motion_generation.lula.kinematics import LulaKinematicsSolver
+
+import omni.usd
+import h5py
+import numpy as np
+import time
+import os
+from pathlib import Path
+
+from src.visualization import (
+    EEFVisualizer,
+    VisConfig,
+    COLOR_AXIS_X,
+    COLOR_AXIS_Y,
+    COLOR_AXIS_Z,
+    COLOR_AXIS_X_FADED,
+    ORIENT_LENGTH,
+    FRAME_LINE_SIZE,
+)
+
+
+FRANKA_RIGHT_PATH = "/World/fer_orcahand_right_extended"
+FRANKA_LEFT_PATH = "/World/fer_orcahand_left_extended"
+EE_FRAME_NAME = "fer_link8"
+EE_WRIST_OFFSET_IN_LINK8 = np.array([0.13, 0.0, 0.07], dtype=np.float32)
+Q_TOOL_TO_URDF_WXYZ = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)  # Rx(180°)
+
+ARM_JOINT_NAMES = [f"panda_joint{i}" for i in range(1, 8)]
+HAND_LEFT_JOINT_NAMES = [
+    "left_wrist",
+    "left_thumb_mcp", "left_thumb_abd", "left_thumb_pip", "left_thumb_dip",
+    "left_index_abd", "left_index_mcp", "left_index_pip",
+    "left_middle_abd", "left_middle_mcp", "left_middle_pip",
+    "left_ring_abd", "left_ring_mcp", "left_ring_pip",
+    "left_pinky_abd", "left_pinky_mcp", "left_pinky_pip",
+]
+HAND_RIGHT_JOINT_NAMES = [
+    "right_wrist",
+    "right_thumb_mcp", "right_thumb_abd", "right_thumb_pip", "right_thumb_dip",
+    "right_index_abd", "right_index_mcp", "right_index_pip",
+    "right_middle_abd", "right_middle_mcp", "right_middle_pip",
+    "right_ring_abd", "right_ring_mcp", "right_ring_pip",
+    "right_pinky_abd", "right_pinky_mcp", "right_pinky_pip",
+]
+
+
+class Simulator:
+    def __init__(self, app, stage_path, h5_path, description_root=None):
+        self.app = app
+        self.stage_path = str(stage_path)
+        self.h5_path = str(h5_path)
+        self.description_root = Path(
+            description_root
+            or os.environ.get(
+                "PANDAORCA_ROOT",
+                "/local/home/teamb/Desktop/Real2Sim/assets/pandaorca_description-main",
+            )
+        )
+        self.lula_descriptor_path = self.description_root / "lula" / "fer_robot_descriptor.yaml"
+        self.urdf_path_left = self.description_root / "urdf" / "fer_orcahand_left_extended.urdf"
+        self.urdf_path_right = self.description_root / "urdf" / "fer_orcahand_right_extended.urdf"
+
+        missing = []
+        for label, path in [
+            ("Stage (USD scene)", self.stage_path),
+            ("H5 dataset", self.h5_path),
+            ("Lula robot descriptor", self.lula_descriptor_path),
+            ("Left combined URDF", self.urdf_path_left),
+            ("Right combined URDF", self.urdf_path_right),
+        ]:
+            if not Path(path).exists():
+                missing.append(f"  {label}: {path}")
+
+        if missing:
+            raise FileNotFoundError("Missing required files:\n" + "\n".join(missing))
+
+    def inspect(self):
+        open_stage(self.stage_path)
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            print("ERROR: Could not access the USD stage.")
+            return
+        print("===== STAGE CONTENT =====")
+        for prim in stage.Traverse():
+            print(prim.GetPath())
+
+    def _print_articulation_info(self, articulation, label):
+        try:
+            dof_names = list(articulation.dof_names)
+        except Exception:
+            dof_names = list(articulation.get_dof_names())
+        print(f"\n===== {label} =====")
+        print(f"Number of DOFs: {len(dof_names)}")
+        print("DOF names:")
+        for i, name in enumerate(dof_names):
+            print(f"  [{i:02d}] {name}")
+
+    def _resolve_dof_indices(self, articulation, names, label):
+        try:
+            dof_names = list(articulation.dof_names)
+        except Exception:
+            dof_names = list(articulation.get_dof_names())
+        name_to_idx = {n: i for i, n in enumerate(dof_names)}
+
+        def candidates(name):
+            if name.startswith("panda_joint"):
+                return [name, name.replace("panda_joint", "fer_joint", 1)]
+            if name.startswith("fer_joint"):
+                return [name, name.replace("fer_joint", "panda_joint", 1)]
+            return [name]
+
+        indices = []
+        for name in names:
+            resolved = False
+            for cand in candidates(name):
+                if cand in name_to_idx:
+                    if cand != name:
+                        print(f"[DOF] '{name}' matched via alias '{cand}'")
+                    indices.append(name_to_idx[cand])
+                    resolved = True
+                    break
+            if resolved:
+                continue
+
+            matches = [dof for dof in dof_names if dof.endswith(name)]
+            if len(matches) == 1:
+                print(f"[DOF] '{name}' matched via suffix to '{matches[0]}'")
+                indices.append(name_to_idx[matches[0]])
+            elif len(matches) > 1:
+                raise RuntimeError(f"Ambiguous suffix match for '{name}' in {label}: {matches}")
+            else:
+                raise RuntimeError(f"Cannot find '{name}' in {label} DOFs: {dof_names}")
+
+        return np.array(indices, dtype=int)
+
+    @staticmethod
+    def _normalize_quat_wxyz(quat):
+        quat = np.asarray(quat, dtype=np.float32).reshape(4)
+        n = np.linalg.norm(quat)
+        if n < 1e-8:
+            return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        return quat / n
+
+    @classmethod
+    def _quat_multiply_wxyz(cls, q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        ], dtype=np.float32)
+
+    @classmethod
+    def _tool_quat_to_urdf(cls, q_tool_wxyz):
+        q_tool_wxyz = cls._normalize_quat_wxyz(q_tool_wxyz)
+        return cls._normalize_quat_wxyz(cls._quat_multiply_wxyz(Q_TOOL_TO_URDF_WXYZ, q_tool_wxyz))
+
+    @staticmethod
+    def _wxyz_to_rotation_matrix(q):
+        w, x, y, z = Simulator._normalize_quat_wxyz(q)
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], dtype=np.float32)
+
+    @staticmethod
+    def _detect_quaternion_order(arm_data, label):
+        w_if_wxyz = float(np.mean(np.abs(arm_data[:, 3])))
+        w_if_xyzw = float(np.mean(np.abs(arm_data[:, 6])))
+        print(f"[quat] {label}: mean|col3|={w_if_wxyz:.4f} mean|col6|={w_if_xyzw:.4f}")
+        if w_if_xyzw > w_if_wxyz:
+            print(f"[quat] {label}: detected xyzw ordering. Reordering to wxyz.")
+            reordered = arm_data.copy()
+            reordered[:, 3] = arm_data[:, 6]
+            reordered[:, 4] = arm_data[:, 3]
+            reordered[:, 5] = arm_data[:, 4]
+            reordered[:, 6] = arm_data[:, 5]
+            return reordered
+        print(f"[quat] {label}: appears to be wxyz ordering. Using as-is.")
+        return arm_data
+
+    def _create_ik_solver(self, urdf_path, label):
+        solver = LulaKinematicsSolver(
+            robot_description_path=str(self.lula_descriptor_path.resolve()),
+            urdf_path=str(Path(urdf_path).resolve()),
+        )
+        print(f"[IK] Solver ({label}) created. Active joints: {solver.get_joint_names()}")
+        print(f"[IK] Available frames ({label}): {solver.get_all_frame_names()}")
+        return solver
+
+    @staticmethod
+    def _resolve_descendant_prim_path(stage, subtree_root, prim_name):
+        direct_path = f"{subtree_root}/{prim_name}"
+        if stage.GetPrimAtPath(direct_path).IsValid():
+            return direct_path
+
+        matches = [
+            str(prim.GetPath())
+            for prim in stage.Traverse()
+            if str(prim.GetPath()).startswith(f"{subtree_root}/") and prim.GetName() == prim_name
+        ]
+
+        if len(matches) == 1:
+            print(f"[stage] Resolved '{prim_name}' under '{subtree_root}' -> {matches[0]}")
+            return matches[0]
+
+        if not matches:
+            raise RuntimeError(
+                f"Could not find prim '{prim_name}' under '{subtree_root}' in the loaded USD stage"
+            )
+
+        raise RuntimeError(
+            f"Ambiguous prim '{prim_name}' under '{subtree_root}': {matches}"
+        )
+
+    def _compute_arm_ik(self, solver, target_wrist_pos, target_quat_wxyz, warm_start=None):
+        rot = self._wxyz_to_rotation_matrix(target_quat_wxyz)
+        ik_position = np.asarray(target_wrist_pos, dtype=np.float32) - rot @ EE_WRIST_OFFSET_IN_LINK8
+        joint_positions, success = solver.compute_inverse_kinematics(
+            frame_name=EE_FRAME_NAME,
+            target_position=ik_position,
+            target_orientation=target_quat_wxyz,
+            warm_start=warm_start,
+        )
+        if success:
+            return np.asarray(joint_positions, dtype=np.float32), True
+        return None, False
+
+    def play(self, sim_config=None, vis_config=None):
+        set_joints = getattr(sim_config, "set_joints", True)
+        enable_right = getattr(sim_config, "enable_right", True)
+        enable_left = getattr(sim_config, "enable_left", True)
+
+        open_stage(self.stage_path)
+        world = World()
+        stage = omni.usd.get_context().get_stage()
+
+        print("=== Articulation roots in stage ===")
+        from pxr import UsdPhysics
+
+        for prim in stage.Traverse():
+            if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+                print(prim.GetPath())
+
+        arm_right = world.scene.add(SingleArticulation(FRANKA_RIGHT_PATH, name="fer_right"))
+        arm_left = world.scene.add(SingleArticulation(FRANKA_LEFT_PATH, name="fer_left"))
+        world.reset()
+
+        self._print_articulation_info(arm_right, "RIGHT COMBINED ROBOT")
+        self._print_articulation_info(arm_left, "LEFT COMBINED ROBOT")
+
+        arm_idx_r = self._resolve_dof_indices(arm_right, ARM_JOINT_NAMES, "RIGHT COMBINED ROBOT")
+        hand_idx_r = self._resolve_dof_indices(arm_right, HAND_RIGHT_JOINT_NAMES, "RIGHT COMBINED ROBOT")
+        arm_idx_l = self._resolve_dof_indices(arm_left, ARM_JOINT_NAMES, "LEFT COMBINED ROBOT")
+        hand_idx_l = self._resolve_dof_indices(arm_left, HAND_LEFT_JOINT_NAMES, "LEFT COMBINED ROBOT")
+
+        solver_r = self._create_ik_solver(self.urdf_path_right, "right")
+        solver_l = self._create_ik_solver(self.urdf_path_left, "left")
+
+        with h5py.File(self.h5_path, "r") as f:
+            right_arm_data = np.array(f["observations/qpos_arm_right"])
+            left_arm_data = np.array(f["observations/qpos_arm_left"])
+            right_hand_data = np.array(f["observations/qpos_hand_right"]) if "observations/qpos_hand_right" in f else None
+            left_hand_data = np.array(f["observations/qpos_hand_left"]) if "observations/qpos_hand_left" in f else None
+
+        right_arm_data = self._detect_quaternion_order(right_arm_data, "right")
+        left_arm_data = self._detect_quaternion_order(left_arm_data, "left")
+
+        print("\n===== H5 DATA =====")
+        print("right_arm_data shape :", right_arm_data.shape)
+        print("left_arm_data shape  :", left_arm_data.shape)
+        if right_hand_data is not None:
+            print("right_hand_data shape:", right_hand_data.shape)
+        if left_hand_data is not None:
+            print("left_hand_data shape :", left_hand_data.shape)
+
+        n_frames = min(len(right_arm_data), len(left_arm_data))
+        if right_hand_data is not None:
+            n_frames = min(n_frames, len(right_hand_data))
+        if left_hand_data is not None:
+            n_frames = min(n_frames, len(left_hand_data))
+
+        if vis_config is None:
+            vis_config = VisConfig(enabled=False)
+        visualizer = EEFVisualizer() if vis_config.enabled else None
+
+        alpha = vis_config.eef_alpha if vis_config.eef_alpha is not None else (
+            0.15 if vis_config.video_mode else COLOR_AXIS_X_FADED[3]
+        )
+        cx_f = (COLOR_AXIS_X[0], COLOR_AXIS_X[1], COLOR_AXIS_X[2], alpha)
+        cy_f = (COLOR_AXIS_Y[0], COLOR_AXIS_Y[1], COLOR_AXIS_Y[2], alpha)
+        cz_f = (COLOR_AXIS_Z[0], COLOR_AXIS_Z[1], COLOR_AXIS_Z[2], alpha)
+
+        eef_prim_r = None
+        eef_prim_l = None
+        if visualizer is not None:
+            eef_prim_r = XFormPrim(
+                self._resolve_descendant_prim_path(stage, FRANKA_RIGHT_PATH, EE_FRAME_NAME)
+            )
+            eef_prim_l = XFormPrim(
+                self._resolve_descendant_prim_path(stage, FRANKA_LEFT_PATH, EE_FRAME_NAME)
+            )
+
+        prev_arm_r = arm_right.get_joint_positions()[arm_idx_r].copy()
+        prev_arm_l = arm_left.get_joint_positions()[arm_idx_l].copy()
+
+        frame = 0
+        ik_fail_r = 0
+        ik_fail_l = 0
+        control_hz = 30
+        dt = 1.0 / control_hz
+
+        world.play()
+        for _ in range(10):
+            world.step(render=True)
+
+        cam_eye = getattr(sim_config, "camera_eye", None)
+        cam_target = getattr(sim_config, "camera_target", None)
+        if cam_eye is not None and cam_target is not None:
+            from isaacsim.core.utils.viewports import set_camera_view
+
+            set_camera_view(eye=np.array(cam_eye), target=np.array(cam_target))
+
+        while self.app.is_running() and frame < n_frames:
+            if enable_right:
+                wrist_pose_r = np.asarray(right_arm_data[frame], dtype=np.float32)
+                pos_r = wrist_pose_r[:3]
+                quat_tool_r = self._normalize_quat_wxyz(wrist_pose_r[3:7])
+                quat_urdf_r = self._tool_quat_to_urdf(quat_tool_r)
+                q_full_r = arm_right.get_joint_positions().copy()
+                q_arm_r, ok_r = self._compute_arm_ik(
+                    solver_r, pos_r, quat_urdf_r, warm_start=prev_arm_r
+                )
+                if ok_r:
+                    q_full_r[arm_idx_r] = q_arm_r
+                    prev_arm_r = q_arm_r.copy()
+                else:
+                    ik_fail_r += 1
+                    q_full_r[arm_idx_r] = prev_arm_r
+                    print(f"[frame {frame}] IK failed RIGHT")
+                if right_hand_data is not None:
+                    q_hand_r = np.asarray(right_hand_data[frame], dtype=np.float32).reshape(-1)
+                    if q_hand_r.shape[0] == hand_idx_r.shape[0]:
+                        q_full_r[hand_idx_r] = q_hand_r
+                    else:
+                        print(
+                            f"[WARN] RIGHT hand qpos size {q_hand_r.shape[0]} != expected {hand_idx_r.shape[0]}"
+                        )
+                if set_joints:
+                    arm_right.set_joint_positions(q_full_r)
+
+            if enable_left:
+                wrist_pose_l = np.asarray(left_arm_data[frame], dtype=np.float32)
+                pos_l = wrist_pose_l[:3]
+                quat_tool_l = self._normalize_quat_wxyz(wrist_pose_l[3:7])
+                quat_urdf_l = self._tool_quat_to_urdf(quat_tool_l)
+                q_full_l = arm_left.get_joint_positions().copy()
+                q_arm_l, ok_l = self._compute_arm_ik(
+                    solver_l, pos_l, quat_urdf_l, warm_start=prev_arm_l
+                )
+                if ok_l:
+                    q_full_l[arm_idx_l] = q_arm_l
+                    prev_arm_l = q_arm_l.copy()
+                else:
+                    ik_fail_l += 1
+                    q_full_l[arm_idx_l] = prev_arm_l
+                    print(f"[frame {frame}] IK failed LEFT")
+                if left_hand_data is not None:
+                    q_hand_l = np.asarray(left_hand_data[frame], dtype=np.float32).reshape(-1)
+                    if q_hand_l.shape[0] == hand_idx_l.shape[0]:
+                        q_full_l[hand_idx_l] = q_hand_l
+                    else:
+                        print(
+                            f"[WARN] LEFT hand qpos size {q_hand_l.shape[0]} != expected {hand_idx_l.shape[0]}"
+                        )
+                if set_joints:
+                    arm_left.set_joint_positions(q_full_l)
+
+            viz_offset = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            if visualizer is not None:
+                if enable_right:
+                    act_pos_r_b, act_quat_wxyz_r_b = eef_prim_r.get_world_poses()
+                    act_quat_r_xyzw = np.array(
+                        [
+                            act_quat_wxyz_r_b[0, 1],
+                            act_quat_wxyz_r_b[0, 2],
+                            act_quat_wxyz_r_b[0, 3],
+                            act_quat_wxyz_r_b[0, 0],
+                        ],
+                        dtype=np.float32,
+                    )
+                    quat_urdf_r_xyzw = np.array(
+                        [quat_urdf_r[1], quat_urdf_r[2], quat_urdf_r[3], quat_urdf_r[0]],
+                        dtype=np.float32,
+                    )
+                    if vis_config.show_eef:
+                        visualizer.draw_frame(pos_r, quat_urdf_r_xyzw, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                        visualizer.draw_frame(act_pos_r_b[0], act_quat_r_xyzw, cx_f, cy_f, cz_f)
+                    if vis_config.show_offset:
+                        visualizer.draw_frame(
+                            pos_r + viz_offset,
+                            quat_urdf_r_xyzw,
+                            COLOR_AXIS_X,
+                            COLOR_AXIS_Y,
+                            COLOR_AXIS_Z,
+                            length=ORIENT_LENGTH * 0.5,
+                            width=FRAME_LINE_SIZE * 2,
+                        )
+                        visualizer.draw_frame(act_pos_r_b[0] + viz_offset, act_quat_r_xyzw, cx_f, cy_f, cz_f)
+
+                if enable_left:
+                    act_pos_l_b, act_quat_wxyz_l_b = eef_prim_l.get_world_poses()
+                    act_quat_l_xyzw = np.array(
+                        [
+                            act_quat_wxyz_l_b[0, 1],
+                            act_quat_wxyz_l_b[0, 2],
+                            act_quat_wxyz_l_b[0, 3],
+                            act_quat_wxyz_l_b[0, 0],
+                        ],
+                        dtype=np.float32,
+                    )
+                    quat_urdf_l_xyzw = np.array(
+                        [quat_urdf_l[1], quat_urdf_l[2], quat_urdf_l[3], quat_urdf_l[0]],
+                        dtype=np.float32,
+                    )
+                    if vis_config.show_eef:
+                        visualizer.draw_frame(pos_l, quat_urdf_l_xyzw, COLOR_AXIS_X, COLOR_AXIS_Y, COLOR_AXIS_Z)
+                        visualizer.draw_frame(act_pos_l_b[0], act_quat_l_xyzw, cx_f, cy_f, cz_f)
+                    if vis_config.show_offset:
+                        visualizer.draw_frame(
+                            pos_l + viz_offset,
+                            quat_urdf_l_xyzw,
+                            COLOR_AXIS_X,
+                            COLOR_AXIS_Y,
+                            COLOR_AXIS_Z,
+                            length=ORIENT_LENGTH * 0.5,
+                            width=FRAME_LINE_SIZE * 2,
+                        )
+                        visualizer.draw_frame(act_pos_l_b[0] + viz_offset, act_quat_l_xyzw, cx_f, cy_f, cz_f)
+
+            if frame % 100 == 0:
+                print(f"\nframe {frame}/{n_frames}")
+                if enable_right:
+                    print("  pos_r         :", pos_r)
+                    print("  quat_urdf_r   :", quat_urdf_r)
+                if enable_left:
+                    print("  pos_l         :", pos_l)
+                    print("  quat_urdf_l   :", quat_urdf_l)
+                print(f"  IK fails      : right={ik_fail_r}, left={ik_fail_l}")
+
+            world.step(render=True)
+            time.sleep(dt)
+            frame += 1
+
+        print("\nReplay finished.")
+        print(f"IK failures right: {ik_fail_r}/{n_frames}")
+        print(f"IK failures left : {ik_fail_l}/{n_frames}")
+
+        while self.app.is_running():
+            world.step(render=True)
