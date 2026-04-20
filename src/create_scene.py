@@ -1,7 +1,8 @@
 """Build the dual-arm scene from scratch.
 
-Creates a new USD stage, adds two independent tables each with an overhead
-camera, references one robot on each table, then saves to ./scenes/scene.usd.
+Creates a new USD stage, adds two independent tables with calibrated cameras,
+references one robot on each table, places the manipulation objects, then
+saves to ./scenes/scene.usd.
 """
 
 from isaacsim import SimulationApp
@@ -9,8 +10,9 @@ simulation_app = SimulationApp({"headless": True})
 
 from pathlib import Path
 import os
+import numpy as np
 import omni.usd
-from pxr import UsdGeom, UsdLux, UsdPhysics, Gf
+from pxr import UsdGeom, UsdLux, UsdPhysics, Gf, Sdf
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DESCRIPTION_ROOT = Path(
@@ -22,7 +24,34 @@ DESCRIPTION_ROOT = Path(
 
 LEFT_ROBOT_USD  = DESCRIPTION_ROOT / "usd" / "fer_orcahand_left_extended"  / "fer_orcahand_left_extended.usd"
 RIGHT_ROBOT_USD = DESCRIPTION_ROOT / "usd" / "fer_orcahand_right_extended" / "fer_orcahand_right_extended.usd"
+RUBBER_DUCK_USD = BASE_DIR / "assets" / "objects" / "rubber_duck.usd"
+BALL_USD        = BASE_DIR / "assets" / "objects" / "ball.usd"
 OUTPUT_SCENE    = BASE_DIR / "scenes" / "scene.usd"
+
+# ── Camera calibration ────────────────────────────────────────────────────────
+# Aria camera intrinsics (full resolution 640×480)
+ARIA_INTRINSICS = np.array([
+    [133.25430222 * 2, 0.0,             320, 0],
+    [0.0,             133.25430222 * 2, 240, 0],
+    [0.0,             0.0,             1.0, 0],
+])
+
+# Extrinsics: cam→base (4×4), from physical lab calibration
+CAMERA_EXTRINSICS = {
+    "left_cam": np.array([
+        [-0.02199727, -0.80581615,  0.59175708,  0.20403467],
+        [-0.99905014,  0.03998766,  0.01731508, -0.25486327],
+        [-0.03761575, -0.59081411, -0.80593036,  0.43379187],
+        [ 0.,          0.,          0.,          1.        ],
+    ]),
+    "right_cam": np.array([
+        [ 0.02933941, -0.83227828,  0.55358113,  0.17515134],
+        [-0.99642232,  0.01956109,  0.08221870,  0.34649483],
+        [-0.07925749, -0.55401284, -0.82872675,  0.46895363],
+        [ 0.,          0.,          0.,          1.        ],
+    ]),
+}
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def add_reference(stage, prim_path: str, asset_path: Path):
@@ -40,6 +69,21 @@ def set_xform(prim, translate=(0, 0, 0), rotate_xyz=(0, 0, 0), scale=(1, 1, 1)):
     print(f"  translate={translate}  rotateXYZ={rotate_xyz}  scale={scale}")
 
 
+def set_xform_from_matrix(prim, T):
+    """Set prim transform from a 4×4 homogeneous matrix (prim relative to parent)."""
+    T = np.asarray(T, dtype=np.float64)
+    xform = UsdGeom.Xformable(prim)
+    xform.ClearXformOpOrder()
+    xform.AddTransformOp(opSuffix="scene").Set(
+        Gf.Matrix4d(
+            T[0,0], T[0,1], T[0,2], T[0,3],
+            T[1,0], T[1,1], T[1,2], T[1,3],
+            T[2,0], T[2,1], T[2,2], T[2,3],
+            T[3,0], T[3,1], T[3,2], T[3,3],
+        )
+    )
+
+
 def create_table(stage, prim_path: str, translate, scale):
     prim = stage.DefinePrim(prim_path, "Cube")
     UsdPhysics.CollisionAPI.Apply(prim)
@@ -48,15 +92,37 @@ def create_table(stage, prim_path: str, translate, scale):
     return prim
 
 
-def add_camera(stage, prim_path: str, translate, rotate_xyz=(0, 0, 0)):
-    """Overhead camera — with Z-up, identity orientation looks straight down."""
+def add_camera(stage, prim_path, intrinsics, extrinsic_cam_to_parent,
+               image_size=(640, 480), clipping_range=(0.01, 100.0),
+               horizontal_aperture_mm=20.955):
+    """Add a calibrated pinhole camera from intrinsics + extrinsic 4×4 matrix."""
+    intrinsics = np.asarray(intrinsics, dtype=np.float64)
+    T = np.asarray(extrinsic_cam_to_parent, dtype=np.float64)
+
+    width, height = image_size
+    fx = float(intrinsics[0, 0])
+    fy = float(intrinsics[1, 1])
+    cx = float(intrinsics[0, 2])
+    cy = float(intrinsics[1, 2])
+
     cam = UsdGeom.Camera.Define(stage, prim_path)
-    xform = UsdGeom.Xformable(cam)
-    xform.AddTranslateOp(opSuffix="scene").Set(Gf.Vec3d(*translate))
-    xform.AddRotateXYZOp(opSuffix="scene").Set(Gf.Vec3f(*rotate_xyz))
-    cam.CreateFocalLengthAttr(24.0)
-    cam.CreateHorizontalApertureAttr(36.0)
-    print(f"Camera created: {prim_path}  translate={translate}")
+    set_xform_from_matrix(cam.GetPrim(), T)
+
+    focal_length_mm      = fx * horizontal_aperture_mm / width
+    vertical_aperture_mm = horizontal_aperture_mm * height / width
+    horiz_offset_mm      = (cx - width  / 2.0) * horizontal_aperture_mm / width
+    vert_offset_mm       = (cy - height / 2.0) * vertical_aperture_mm   / height
+
+    cam.CreateHorizontalApertureAttr(horizontal_aperture_mm)
+    cam.CreateVerticalApertureAttr(vertical_aperture_mm)
+    cam.CreateFocalLengthAttr(focal_length_mm)
+    cam.CreateClippingRangeAttr(Gf.Vec2f(*clipping_range))
+    cam.CreateHorizontalApertureOffsetAttr(horiz_offset_mm)
+    cam.CreateVerticalApertureOffsetAttr(vert_offset_mm)
+    cam.GetPrim().CreateAttribute("camera:imageWidth",  Sdf.ValueTypeNames.Int).Set(width)
+    cam.GetPrim().CreateAttribute("camera:imageHeight", Sdf.ValueTypeNames.Int).Set(height)
+
+    print(f"Camera created: {prim_path}  fx={fx:.1f} fy={fy:.1f}")
     return cam
 
 
@@ -72,7 +138,7 @@ def main():
 
     stage.DefinePrim("/World", "Xform")
 
-    # Physics scene
+    # Physics
     physics = UsdPhysics.Scene.Define(stage, "/World/PhysicsScene")
     physics.CreateGravityDirectionAttr(Gf.Vec3f(0, 0, -1))
     physics.CreateGravityMagnitudeAttr(9.81)
@@ -89,21 +155,23 @@ def main():
 
     # Lighting
     dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
-    dome.CreateIntensityAttr(500.0)
+    dome.CreateIntensityAttr(1000.0)
+    dome.CreateColorAttr(Gf.Vec3f(1.0, 0.98, 0.95))
+
+    # ── CAMERAS (calibrated from physical lab) ─────────────────────────────
+    add_camera(stage, "/World/left_cam",
+               intrinsics=ARIA_INTRINSICS,
+               extrinsic_cam_to_parent=CAMERA_EXTRINSICS["left_cam"])
+    add_camera(stage, "/World/right_cam",
+               intrinsics=ARIA_INTRINSICS,
+               extrinsic_cam_to_parent=CAMERA_EXTRINSICS["right_cam"])
 
     # ── LEFT SIDE ──────────────────────────────────────────────────────────
-    # Table: 1 m × 0.7 m × 1 m box, top surface at z = 1.0 m
     create_table(
         stage, "/World/table_left",
         translate=(0.0, 0.35, 0.75),
         scale=(0.5, 0.35, 0.02),
     )
-    # Overhead camera above the left table, looking straight down
-    add_camera(
-        stage, "/World/camera_left",
-        translate=(0.0, 0.386, 2.0),
-    )
-    # Robot
     if LEFT_ROBOT_USD.exists():
         left = add_reference(stage, "/World/fer_orcahand_left_extended", LEFT_ROBOT_USD)
         left.SetInstanceable(False)
@@ -117,16 +185,28 @@ def main():
         translate=(0.0, -0.35, 0.75),
         scale=(0.5, 0.35, 0.02),
     )
-    add_camera(
-        stage, "/World/camera_right",
-        translate=(0.0, -0.386, 2.0),
-    )
     if RIGHT_ROBOT_USD.exists():
         right = add_reference(stage, "/World/fer_orcahand_right_extended", RIGHT_ROBOT_USD)
         right.SetInstanceable(False)
         set_xform(right, translate=(-0.255, -0.35, 0.77))
     else:
         print(f"WARNING: right robot USD not found: {RIGHT_ROBOT_USD}")
+
+    # ── OBJECTS ────────────────────────────────────────────────────────────
+    # rubber_duck.usd is in millimetres — scale down to metres
+    if RUBBER_DUCK_USD.exists():
+        duck = add_reference(stage, "/World/rubber_duck", RUBBER_DUCK_USD)
+        duck.SetInstanceable(False)
+        set_xform(duck, translate=(0.0, 0.35, 0.77), scale=(0.001, 0.001, 0.001))
+    else:
+        print(f"WARNING: rubber_duck.usd not found: {RUBBER_DUCK_USD}")
+
+    if BALL_USD.exists():
+        ball = add_reference(stage, "/World/ball", BALL_USD)
+        ball.SetInstanceable(False)
+        set_xform(ball, translate=(0.0, -0.35, 0.77))
+    else:
+        print(f"WARNING: ball.usd not found: {BALL_USD}")
 
     # Save
     OUTPUT_SCENE.parent.mkdir(parents=True, exist_ok=True)

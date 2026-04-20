@@ -13,6 +13,8 @@ class SimConfig:
     enable_left: bool = True
     camera_eye: tuple = (1.97035, 0.00915, 1.58108)
     camera_target: tuple = (0.51, 0.0, 1.23)
+    trajectory_npy: str = None        # path to (N,4,4) object trajectory .npy
+    object_prim_path: str = "/World/rubber_duck"
 
 
 BASE_DIR = Path(__file__).resolve().parent
