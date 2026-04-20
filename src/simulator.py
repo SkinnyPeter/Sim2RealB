@@ -2,7 +2,6 @@ from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
 from isaacsim.robot_motion.motion_generation import (
-    ArticulationKinematicsSolver,
     LulaKinematicsSolver,
 )
 
@@ -10,10 +9,10 @@ import omni.usd
 import h5py
 import numpy as np
 import time
+import torch
 from pathlib import Path
 
 try:
-    import torch
     from curobo.types.base import TensorDeviceType
     from curobo.types.math import Pose as CuroboPose
     from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
@@ -23,7 +22,33 @@ try:
 except ImportError:
     _CUROBO_AVAILABLE = False
 
+from src.ik_pk_adam import build_pk_chain, pk_adam_ik_batch
+
 from pxr import Gf, UsdGeom, UsdPhysics
+
+
+# Rx(180°) quaternion in wxyz — converts tool convention (Z-down) to URDF convention (Z-forward)
+_Q_RX180 = np.array([0.0, 1.0, 0.0, 0.0])
+
+
+def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ], dtype=np.float64)
+
+
+def _quat_to_rot(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q / np.linalg.norm(q)
+    return np.array([
+        [1-2*(y*y+z*z), 2*(x*y-w*z),   2*(x*z+w*y)  ],
+        [2*(x*y+w*z),   1-2*(x*x+z*z), 2*(y*z-w*x)  ],
+        [2*(x*z-w*y),   2*(y*z+w*x),   1-2*(x*x+y*y)],
+    ])
 
 from src.visualization import (
     EEFVisualizer,
@@ -32,6 +57,7 @@ from src.visualization import (
     COLOR_AXIS_X_FADED, COLOR_AXIS_Y_FADED, COLOR_AXIS_Z_FADED,
     ORIENT_LENGTH, FRAME_LINE_SIZE,
 )
+
 
 import isaacsim.robot_motion.motion_generation as _mg_pkg
 _MOTION_GEN_EXT = Path(_mg_pkg.__file__).parents[3]  # .../isaacsim.robot_motion.motion_generation/
@@ -131,20 +157,22 @@ class Simulator:
             SingleArticulation("/World/Franka_left", name="franka_left")
         )
 
-        hand_right = world.scene.add(
-            SingleArticulation("/World/Franka_right/panda_hand/ORCA_right", name="orca_right")
-        )
-
-        hand_left = world.scene.add(
-            SingleArticulation("/World/Franka_left/panda_hand/ORCA_left", name="orca_left")
-        )
-        
+        # ORCA hand USD assets reference hardcoded paths from the original dev machine
+        # and are unavailable here — skip registering them so world.reset() doesn't crash.
+        # hand_right = world.scene.add(
+        #     SingleArticulation("/World/Franka_right/panda_hand/ORCA_right", name="orca_right")
+        # )
+        # hand_left = world.scene.add(
+        #     SingleArticulation("/World/Franka_left/panda_hand/ORCA_left", name="orca_left")
+        # )
 
         world.reset()
 
         # ===== Arm base positions in world frame =====
-        base_pos_r, _ = arm_right.get_world_pose()
-        base_pos_l, _ = arm_left.get_world_pose()
+        base_pos_r, base_quat_wxyz_r = arm_right.get_world_pose()
+        base_pos_l, base_quat_wxyz_l = arm_left.get_world_pose()
+        base_quat_wxyz_r = np.asarray(base_quat_wxyz_r, dtype=np.float64).flatten()
+        base_quat_wxyz_l = np.asarray(base_quat_wxyz_l, dtype=np.float64).flatten()
 
         # ===== EEF prim handles for actual pose readback =====
         eef_prim_r = XFormPrim("/World/Franka_right/panda_hand")
@@ -164,15 +192,6 @@ class Simulator:
             urdf_path=PANDA_ARM_URDF_PATH,
         )
 
-        articulation_solver_r = ArticulationKinematicsSolver(
-            arm_right, kin_solver_r, end_effector_frame_name="panda_hand"
-        )
-        articulation_solver_l = ArticulationKinematicsSolver(
-            arm_left, kin_solver_l, end_effector_frame_name="panda_hand"
-        )
-
-        print("EEF frame right:", articulation_solver_r.get_end_effector_frame())
-        print("EEF frame left :", articulation_solver_l.get_end_effector_frame())
 
         # ===== curobo IK solver setup =====
         if ik_solver == "curobo":
@@ -199,6 +218,15 @@ class Simulator:
             prev_retract_l = _home.clone()
             prev_q_r = _home.unsqueeze(0).clone()    # (1, 1, 7)
             prev_q_l = _home.unsqueeze(0).clone()
+
+        # ===== pk_adam IK solver setup =====
+        if ik_solver == "pk_adam":
+            _dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            pk_chain = build_pk_chain(PANDA_ARM_URDF_PATH, _dev)
+            _home_pk = torch.tensor([0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0], dtype=torch.float32, device=_dev)
+            pk_q_prev_r = _home_pk.clone()
+            pk_q_prev_l = _home_pk.clone()
+            print(f"pytorch_kinematics FK chain ready on {_dev}: {pk_chain.get_joint_parameter_names()}")
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -236,6 +264,9 @@ class Simulator:
         frame = 0
         ik_fail_r = 0
         ik_fail_l = 0
+        _home_arm = np.array([0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0], dtype=np.float64)
+        prev_arm_joints_r = _home_arm.copy()
+        prev_arm_joints_l = _home_arm.copy()
 
         CONTROL_HZ = 30
         dt = 1.0 / CONTROL_HZ
@@ -257,49 +288,52 @@ class Simulator:
             pos_r = np.asarray(right_positions[frame], dtype=np.float32)
             pos_l = np.asarray(left_positions[frame], dtype=np.float32)
 
-            # H5 stores quaternions as wxyz; Lula/Isaac Sim expects xyzw — normalize on read
-            q_raw_r  = np.asarray(right_quaternions[frame], dtype=np.float32)
-            q_raw_l  = np.asarray(left_quaternions[frame],  dtype=np.float32)
-            quat_r   = np.array([q_raw_r[1], q_raw_r[2], q_raw_r[3], q_raw_r[0]], dtype=np.float32)
-            quat_r  /= np.linalg.norm(quat_r)
-            quat_l   = np.array([q_raw_l[1], q_raw_l[2], q_raw_l[3], q_raw_l[0]], dtype=np.float32)
-            quat_l  /= np.linalg.norm(quat_l)
-
-            # Other variants (uncomment and assign to cur_quat to use):
-            quat_r_flip = np.array([ quat_r[3],  quat_r[2], -quat_r[1], -quat_r[0]], dtype=np.float32)  # 180° flip around local X
-            quat_l_flip = np.array([ quat_l[3],  quat_l[2], -quat_l[1], -quat_l[0]], dtype=np.float32)
-
-            # Active quaternion — change to any variant above
-            cur_quat_r = quat_r_flip
-            cur_quat_l = quat_l_flip
+            # H5 stores quaternions as wxyz; apply Rx(180°) to convert tool→URDF convention
+            q_raw_r = np.asarray(right_quaternions[frame], dtype=np.float64)
+            q_raw_l = np.asarray(left_quaternions[frame],  dtype=np.float64)
+            q_raw_r /= np.linalg.norm(q_raw_r)
+            q_raw_l /= np.linalg.norm(q_raw_l)
+            # World-frame wxyz after tool→URDF rotation (used for IK and visualization)
+            quat_world_wxyz_r = _quat_mul(_Q_RX180, q_raw_r)
+            quat_world_wxyz_l = _quat_mul(_Q_RX180, q_raw_l)
+            # xyzw for visualization helpers that expect xyzw
+            cur_quat_r = np.array([quat_world_wxyz_r[1], quat_world_wxyz_r[2], quat_world_wxyz_r[3], quat_world_wxyz_r[0]], dtype=np.float32)
+            cur_quat_l = np.array([quat_world_wxyz_l[1], quat_world_wxyz_l[2], quat_world_wxyz_l[3], quat_world_wxyz_l[0]], dtype=np.float32)
 
             # ===== Compute arm IK =====
             ARM_JOINT_INDICES = list(range(7))
 
             if ik_solver == "lula":
-                # ArticulationKinematicsSolver handles base transform internally — pass raw world-frame pos
                 if enable_right:
-                    joint_action_r, ik_success_r = articulation_solver_r.compute_inverse_kinematics(
-                        target_position=pos_r,
-                        target_orientation=cur_quat_r,
+                    arm_joints_r, ik_success_r = kin_solver_r.compute_inverse_kinematics(
+                        frame_name="panda_hand",
+                        target_position=pos_r.astype(np.float64),
+                        target_orientation=quat_world_wxyz_r,
+                        warm_start=prev_arm_joints_r,
                     )
                     if set_joints:
                         if ik_success_r:
-                            arm_right.set_joint_positions(np.asarray(joint_action_r.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                            prev_arm_joints_r = arm_joints_r.copy()
+                            arm_right.set_joint_positions(arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                         else:
                             ik_fail_r += 1
+                            arm_right.set_joint_positions(prev_arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                             print(f"[frame {frame}] IK failed RIGHT")
 
                 if enable_left:
-                    joint_action_l, ik_success_l = articulation_solver_l.compute_inverse_kinematics(
-                        target_position=pos_l,
-                        target_orientation=cur_quat_l,
+                    arm_joints_l, ik_success_l = kin_solver_l.compute_inverse_kinematics(
+                        frame_name="panda_hand",
+                        target_position=pos_l.astype(np.float64),
+                        target_orientation=quat_world_wxyz_l,
+                        warm_start=prev_arm_joints_l,
                     )
                     if set_joints:
                         if ik_success_l:
-                            arm_left.set_joint_positions(np.asarray(joint_action_l.joint_positions, dtype=np.float32), joint_indices=ARM_JOINT_INDICES)
+                            prev_arm_joints_l = arm_joints_l.copy()
+                            arm_left.set_joint_positions(arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                         else:
                             ik_fail_l += 1
+                            arm_left.set_joint_positions(prev_arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                             print(f"[frame {frame}] IK failed LEFT")
 
             elif ik_solver == "curobo":
@@ -335,6 +369,38 @@ class Simulator:
                         else:
                             ik_fail_l += 1
                             print(f"[frame {frame}] IK failed LEFT")
+
+            elif ik_solver == "pk_adam":
+                # Build batch: only include enabled arms
+                _pk_targets, _pk_warms, _pk_labels = [], [], []
+                if enable_right:
+                    _pk_targets.append((pos_r, cur_quat_r))
+                    _pk_warms.append(pk_q_prev_r)
+                    _pk_labels.append("right")
+                if enable_left:
+                    _pk_targets.append((pos_l, cur_quat_l))
+                    _pk_warms.append(pk_q_prev_l)
+                    _pk_labels.append("left")
+
+                _pk_results = pk_adam_ik_batch(pk_chain, _pk_targets, _pk_warms, _dev)
+
+                for _label, (q_np, ik_ok) in zip(_pk_labels, _pk_results):
+                    if _label == "right":
+                        pk_q_prev_r = torch.tensor(q_np, dtype=torch.float32, device=_dev)
+                        if set_joints:
+                            if ik_ok:
+                                arm_right.set_joint_positions(q_np.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                            else:
+                                ik_fail_r += 1
+                                print(f"[frame {frame}] IK failed RIGHT")
+                    else:
+                        pk_q_prev_l = torch.tensor(q_np, dtype=torch.float32, device=_dev)
+                        if set_joints:
+                            if ik_ok:
+                                arm_left.set_joint_positions(q_np.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                            else:
+                                ik_fail_l += 1
+                                print(f"[frame {frame}] IK failed LEFT")
 
             # ===== EEF visualization =====
             VIZ_OFFSET = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # 1 m up for unobstructed inspection
