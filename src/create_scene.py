@@ -5,7 +5,8 @@ camera, references one robot on each table, then saves to ./scenes/scene.usd.
 """
 
 from isaacsim import SimulationApp
-simulation_app = SimulationApp({"headless": True})
+VISUALIZE = True
+simulation_app = SimulationApp({"headless": not VISUALIZE})
 
 from pathlib import Path
 import os
@@ -24,6 +25,11 @@ LEFT_ROBOT_USD  = DESCRIPTION_ROOT / "usd" / "fer_orcahand_left_extended"  / "fe
 RIGHT_ROBOT_USD = DESCRIPTION_ROOT / "usd" / "fer_orcahand_right_extended" / "fer_orcahand_right_extended.usd"
 OUTPUT_SCENE    = BASE_DIR / "scenes" / "scene.usd"
 
+# Cameras 
+T1 = (-0.045965, 0.095137, 1.203792)
+R1 = (36.244522, 2.155732, -91.261346)
+T2 = (-0.074849, -0.003505, 1.238954)
+R2 = (33.763158, 4.545887, -88.313427)
 
 def add_reference(stage, prim_path: str, asset_path: Path):
     prim = stage.DefinePrim(prim_path, "Xform")
@@ -101,8 +107,11 @@ def main():
     # Overhead camera above the left table, looking straight down
     add_camera(
         stage, "/World/camera_left",
-        translate=(0.0, 0.386, 2.0),
+        translate=T1,
+        rotate_xyz=R1
     )
+
+
     # Robot
     if LEFT_ROBOT_USD.exists():
         left = add_reference(stage, "/World/fer_orcahand_left_extended", LEFT_ROBOT_USD)
@@ -119,14 +128,25 @@ def main():
     )
     add_camera(
         stage, "/World/camera_right",
-        translate=(0.0, -0.386, 2.0),
+        translate=T2,
+        rotate_xyz=R2
     )
+
     if RIGHT_ROBOT_USD.exists():
         right = add_reference(stage, "/World/fer_orcahand_right_extended", RIGHT_ROBOT_USD)
         right.SetInstanceable(False)
         set_xform(right, translate=(-0.255, -0.35, 0.77))
     else:
         print(f"WARNING: right robot USD not found: {RIGHT_ROBOT_USD}")
+
+    # Visualization Loop
+    if VISUALIZE:
+        print("Visualization mode active. Close the window or press Ctrl+C to exit.")
+        try:
+            while simulation_app.is_running():
+                simulation_app.update()
+        except KeyboardInterrupt:
+            pass
 
     # Save
     OUTPUT_SCENE.parent.mkdir(parents=True, exist_ok=True)
