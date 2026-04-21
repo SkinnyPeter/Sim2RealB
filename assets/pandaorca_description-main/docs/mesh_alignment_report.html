@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mesh Alignment Report &mdash; Panda + 90&deg; Connector + OrcaHand (Left &amp; Right)</title>
+<style>
+  :root { --bg: #f8f9fa; --card: #fff; --border: #dee2e6; --accent: #0d6efd;
+          --accent2: #198754; --warn: #dc3545; --text: #212529; --muted: #6c757d; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.6;
+         max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+  h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.35rem; margin-top: 2rem; border-bottom: 2px solid var(--accent);
+       padding-bottom: .3rem; margin-bottom: 1rem; }
+  h3 { font-size: 1.1rem; margin-top: 1.25rem; margin-bottom: .5rem; color: var(--accent); }
+  p, li { margin-bottom: .5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+          padding: 1.25rem; margin-bottom: 1.25rem; }
+  .card-header { font-weight: 600; margin-bottom: .75rem; }
+  table { width: 100%; border-collapse: collapse; margin: .75rem 0; font-size: .9rem; }
+  th, td { padding: .45rem .6rem; border: 1px solid var(--border); text-align: left; }
+  th { background: #e9ecef; font-weight: 600; }
+  td.num { font-family: 'Consolas', 'Fira Code', monospace; text-align: right; }
+  code, .mono { font-family: 'Consolas', 'Fira Code', monospace; font-size: .88em; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px;
+        overflow-x: auto; font-size: .85rem; line-height: 1.5; margin: .75rem 0; }
+  pre .kw { color: #569cd6; } pre .str { color: #ce9178; } pre .cmt { color: #6a9955; }
+  pre .num { color: #b5cea8; }
+  .tag { display: inline-block; padding: .15rem .5rem; border-radius: 4px;
+         font-size: .8rem; font-weight: 600; }
+  .tag-ok  { background: #d1e7dd; color: #0f5132; }
+  .tag-warn { background: #fff3cd; color: #664d03; }
+  .tag-err  { background: #f8d7da; color: #842029; }
+  .note { background: #fff3cd; border-left: 4px solid #ffc107; padding: .75rem 1rem;
+          border-radius: 0 6px 6px 0; margin: 1rem 0; }
+  .note-blue { background: #cff4fc; border-left-color: #0dcaf0; }
+  .pipeline { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+              margin: 1rem 0; }
+  .pipeline .box { background: var(--card); border: 2px solid var(--accent);
+                   border-radius: 8px; padding: .5rem 1rem; font-weight: 600;
+                   text-align: center; min-width: 120px; }
+  .pipeline .arrow { font-size: 1.5rem; color: var(--accent); }
+  ul { padding-left: 1.5rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  .vec { white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<h1>Mesh Alignment Report</h1>
+<p class="subtitle">Franka Panda &nbsp;&rarr;&nbsp; 90&deg; Connector &nbsp;&rarr;&nbsp; OrcaHand (Left &amp; Right)
+&mdash; <code>fer_orcahand_{left,right}_extended.urdf</code></p>
+
+<!-- ================================================================ -->
+<h2>1. Assembly Overview</h2>
+
+<div class="pipeline">
+  <div class="box">fer_link8<br><small>(Panda flange)</small></div>
+  <div class="arrow">&xrarr;</div>
+  <div class="box">connector_mount<br><small>(90&deg; bracket)</small></div>
+  <div class="arrow">&xrarr;</div>
+  <div class="box">world<br><small>(OrcaHand left/right)</small></div>
+</div>
+
+<p>Two fixed URDF joints chain these three links. Each joint&rsquo;s <code>&lt;origin&gt;</code>
+places the child frame in the parent frame via translation + rotation:</p>
+<pre>p_parent = R(rpy) &middot; p_child + xyz</pre>
+
+<div class="card">
+  <div class="card-header">Meshes involved</div>
+  <table>
+    <tr><th>Component</th><th>STL file</th><th>Units</th><th>Vertices</th><th>Faces</th></tr>
+    <tr>
+      <td>90&deg; Connector</td>
+      <td><code>mount/Gavin90DegMount_edited_P1S.stl</code></td>
+      <td>mm (scale 0.001)</td>
+      <td class="num">9,807</td><td class="num">19,662</td>
+    </tr>
+    <tr>
+      <td>OrcaHand tower (left)</td>
+      <td><code>orcahand/left/visual/left_visual_tower_camera_mesh.stl</code></td>
+      <td>m</td>
+      <td class="num">7,503</td><td class="num">15,000</td>
+    </tr>
+    <tr>
+      <td>OrcaHand tower (right)</td>
+      <td><code>orcahand/right/visual/right_visual_tower_camera_mesh.stl</code></td>
+      <td>m</td>
+      <td class="num">7,503</td><td class="num">15,000</td>
+    </tr>
+    <tr>
+      <td>Panda link7</td>
+      <td><code>franka/fer/collision/link7.stl</code></td>
+      <td>m</td>
+      <td class="num">102</td><td class="num">200</td>
+    </tr>
+  </table>
+  <p><small>link7 collision mesh is too coarse for bolt-hole extraction; link8 is an empty
+  frame at (0, 0, 0.107) from link7 with no mesh.</small></p>
+</div>
+
+<!-- ================================================================ -->
+<h2>2. Approach</h2>
+
+<p>The alignment script (<code>scripts/compute_alignment.py</code>) extracts geometric
+features directly from the STL meshes to compute rigid-body transforms:</p>
+
+<ol>
+  <li><strong>Face clustering</strong> &mdash; group triangles by normal direction
+      (5&deg; tolerance, area-weighted averaging) to find dominant flat surfaces.</li>
+  <li><strong>Boundary-loop extraction</strong> &mdash; for each face cluster, find edges
+      shared by only one triangle (boundary edges), then trace closed loops.</li>
+  <li><strong>Circular-hole detection</strong> &mdash; filter loops by radius
+      (2&ndash;6&nbsp;mm), circularity (std/mean&nbsp;&lt;&nbsp;0.15), and vertex count
+      (&ge;&nbsp;12) to identify bolt holes.</li>
+  <li><strong>Orthonormal frame construction</strong> &mdash; from a pair of hole centres
+      + face normal, build a right-handed frame <code>[u, v, n]</code>.</li>
+  <li><strong>Mating transform</strong> &mdash; align source frame to destination frame
+      with anti-parallel normals (face-to-face contact) via
+      <code>R = F_dst_flipped &middot; F_src<sup>&minus;1</sup></code>.</li>
+  <li><strong>Disambiguation</strong> &mdash; resolve 180&deg; flip and 4-fold bolt-pattern
+      symmetry by (a)&nbsp;checking connector centroid in +Z from link8 and
+      (b)&nbsp;matching the orca-face bend direction to the existing URDF.</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2>3. Connector Geometry</h2>
+
+<p>The 90&deg; bracket has two perpendicular mounting walls, each with 4 bolt holes
+on a 25&nbsp;mm radius bolt circle.</p>
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-header">Panda face</div>
+    <table>
+      <tr><th>Normal</th><td class="mono vec">(0, &minus;0.683, +0.730)</td></tr>
+      <tr><th>Area</th><td class="num">11,710 mm&sup2;</td></tr>
+      <tr><th>Bolt-circle centre</th><td class="mono vec">(80.0, 22.8, 25.0) mm</td></tr>
+      <tr><th>Bolt-circle radius</th><td class="num">25.00 mm</td></tr>
+    </table>
+    <p><small>4 holes, r&nbsp;&asymp;&nbsp;3.65&nbsp;mm each, 24 boundary vertices.</small></p>
+  </div>
+  <div class="card">
+    <div class="card-header">Orca face</div>
+    <table>
+      <tr><th>Normal</th><td class="mono vec">(0, +0.730, +0.684)</td></tr>
+      <tr><th>Area</th><td class="num">15,977 mm&sup2;</td></tr>
+      <tr><th>Bolt-circle centre</th><td class="mono vec">(80.0, 137.9, 36.8) mm</td></tr>
+      <tr><th>Bolt-circle radius</th><td class="num">25.00 mm</td></tr>
+    </table>
+    <p><small>4 holes, r&nbsp;&asymp;&nbsp;3.65&nbsp;mm each, 24 boundary vertices.</small></p>
+  </div>
+</div>
+
+<p>The two face normals are perpendicular (dot&nbsp;=&nbsp;0.00006). Face assignment
+is based on bolt-circle centre distance from the STL origin: the closer face is the
+panda side.</p>
+
+<div class="card">
+  <div class="card-header">Connector bolt-hole positions (mm)</div>
+  <table>
+    <tr><th></th><th>Hole 0</th><th>Hole 1</th><th>Hole 2</th><th>Hole 3</th></tr>
+    <tr><th>Panda</th>
+      <td class="mono">(62.3, 35.7, 37.1)</td><td class="mono">(62.3, 9.9, 12.9)</td>
+      <td class="mono">(97.7, 9.9, 12.9)</td><td class="mono">(97.7, 35.7, 37.1)</td></tr>
+    <tr><th>Orca</th>
+      <td class="mono">(55.0, 137.9, 36.8)</td><td class="mono">(105.0, 137.9, 36.8)</td>
+      <td class="mono">(80.0, 155.0, 18.6)</td><td class="mono">(80.0, 120.8, 55.1)</td></tr>
+  </table>
+</div>
+
+<!-- ================================================================ -->
+<h2>4. OrcaHand Mounting Geometry</h2>
+
+<p>The tower-camera mesh is first transformed to the orca <code>world</code> frame
+using the URDF visual origin and the <code>world&rarr;left_tower</code> joint offset:</p>
+
+<pre><span class="cmt">// Visual origin (in left_tower frame)</span>
+xyz = (<span class="num">-0.04142</span>, <span class="num">0.05283</span>, <span class="num">-0.01986</span>)
+rpy = (<span class="num">3.06601</span>, <span class="num">-1.08118</span>, <span class="num">-1.46536</span>)
+
+<span class="cmt">// world &rarr; left_tower joint</span>
+xyz = (<span class="num">-0.04</span>, <span class="num">0.0</span>, <span class="num">0.04575</span>)  rpy = (<span class="num">0</span>, <span class="num">0</span>, <span class="num">0</span>)</pre>
+
+<div class="card">
+  <div class="card-header">Mounting face (in orca world frame)</div>
+  <table>
+    <tr><th>Face normal</th><td class="mono vec">(0, +0.022, +1.000)</td>
+        <td>&asymp; +Z</td></tr>
+    <tr><th>Face area</th><td class="num" colspan="2">7,336 mm&sup2;</td></tr>
+    <tr><th>Hole 0</th><td class="mono vec">(&minus;80.45, +24.01, +0.12) mm</td>
+        <td>r = 3.03 mm</td></tr>
+    <tr><th>Hole 1</th><td class="mono vec">(&minus;80.85, &minus;23.93, +0.12) mm</td>
+        <td>r = 2.99 mm</td></tr>
+    <tr><th>Hole spacing</th><td class="num" colspan="2">47.94 mm</td></tr>
+  </table>
+</div>
+
+<div class="note">
+  <strong>Hole spacing mismatch:</strong> The orca has 2 holes at 47.94&nbsp;mm apart.
+  The connector&rsquo;s diagonal hole pair spans 50.00&nbsp;mm. This ~2&nbsp;mm gap
+  (&asymp;&nbsp;1.16&nbsp;mm per-hole alignment error) likely comes from mesh tolerance
+  and the visual-origin transform chain.
+</div>
+
+<!-- ================================================================ -->
+<h2>5. Interface 1 &mdash; link8 &rarr; connector_mount</h2>
+
+<h3>Method</h3>
+<p>The Panda link8 frame is at the flange face: bolt holes should lie in the XY-plane
+at Z&nbsp;=&nbsp;0 with radial distance 25&nbsp;mm from the origin. We iterate over all
+permutations of panda-face holes and both flip modes to find the transform that maps
+them onto this pattern.</p>
+
+<h3>Disambiguation</h3>
+<ul>
+  <li><strong>Physical check:</strong> connector centroid must be at Z&nbsp;&gt;&nbsp;0 in
+      link8 (bracket extends &ldquo;above&rdquo; the flange).</li>
+  <li><strong>Angular match:</strong> among candidates with connector centroid in +Z,
+      select the one whose orca-face normal direction best matches the existing URDF&rsquo;s
+      orientation. This resolves the 4-fold bolt-pattern symmetry (design choice of which
+      direction the bracket bends from the flange).</li>
+</ul>
+
+<div class="card">
+  <div class="card-header">Result &nbsp;<span class="tag tag-ok">GOOD FIT</span></div>
+  <table>
+    <tr><th>xyz</th><td class="mono">0.033733 &nbsp; 0.080000 &nbsp; 0.002642</td></tr>
+    <tr><th>rpy</th><td class="mono">2.389137 &nbsp; &minus;0.000003 &nbsp; &minus;1.570796</td></tr>
+    <tr><th>rpy (deg)</th><td class="mono">+136.9&deg; &nbsp; &minus;0.0&deg; &nbsp; &minus;90.0&deg;</td></tr>
+  </table>
+  <table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Z-error (holes out of XY-plane)</td><td class="num">0.0002 mm</td></tr>
+    <tr><td>Radial error</td><td class="num">0.0000 mm</td></tr>
+    <tr><td>Connector centroid Z</td><td class="num">37.6 mm</td></tr>
+    <tr><td>Orca face normal in link8</td><td class="mono">(&minus;1.00, 0.00, 0.00)</td></tr>
+  </table>
+</div>
+
+<h3>Verification: Panda-face holes in link8 frame</h3>
+<table>
+  <tr><th>Hole</th><th>Position (mm)</th><th>Radial distance</th></tr>
+  <tr><td>0</td><td class="mono">(&minus;17.68, +17.68, &minus;0.00)</td><td class="num">25.00 mm</td></tr>
+  <tr><td>1</td><td class="mono">(+17.68, +17.68, +0.00)</td><td class="num">25.00 mm</td></tr>
+  <tr><td>2</td><td class="mono">(+17.68, &minus;17.68, +0.00)</td><td class="num">25.00 mm</td></tr>
+  <tr><td>3</td><td class="mono">(&minus;17.68, &minus;17.68, &minus;0.00)</td><td class="num">25.00 mm</td></tr>
+</table>
+<p>All four holes lie precisely in the Z&nbsp;=&nbsp;0 plane at radius 25.00&nbsp;mm.
+<span class="tag tag-ok">Excellent</span></p>
+
+<h3>Comparison with original URDF</h3>
+<table>
+  <tr><th></th><th>Original</th><th>Computed</th><th>&Delta;</th></tr>
+  <tr><td>x</td><td class="num">0.053088</td><td class="num">0.033733</td><td class="num">&minus;19.4 mm</td></tr>
+  <tr><td>y</td><td class="num">0.080038</td><td class="num">0.080000</td><td class="num">&minus;0.04 mm</td></tr>
+  <tr><td>z</td><td class="num">0.001877</td><td class="num">0.002642</td><td class="num">+0.8 mm</td></tr>
+  <tr><td>roll</td><td class="num">2.424095</td><td class="num">2.389137</td><td class="num">&minus;2.0&deg;</td></tr>
+  <tr><td>pitch</td><td class="num">&minus;0.034947</td><td class="num">&minus;0.000003</td><td class="num">+2.0&deg;</td></tr>
+  <tr><td>yaw</td><td class="num">&minus;1.572674</td><td class="num">&minus;1.570796</td><td class="num">+0.1&deg;</td></tr>
+</table>
+<p>The main correction is <strong>&minus;19.4&nbsp;mm in X</strong>, shifting the connector
+to the correct bolt-circle centre position on the flange.</p>
+
+<!-- ================================================================ -->
+<h2>6. Interface 2 &mdash; connector_mount &rarr; orcahand_world</h2>
+
+<h3>Method</h3>
+<p>We match the 2 orca mounting holes to the best-fitting diagonal pair of the
+connector&rsquo;s 4 orca-face holes. All combinations of hole pairs, assignment order,
+and flip modes are evaluated. The body-extension direction is checked using a probe
+point 50&nbsp;mm behind the mounting face.</p>
+
+<div class="card">
+  <div class="card-header">Result &nbsp;<span class="tag tag-ok">BEST FIT</span></div>
+  <table>
+    <tr><th>xyz</th><td class="mono">&minus;0.000644 &nbsp; 0.138410 &nbsp; 0.036434</td></tr>
+    <tr><th>rpy</th><td class="mono">&minus;2.301578 &nbsp; 0.006410 &nbsp; 3.136221</td></tr>
+    <tr><th>rpy (deg)</th><td class="mono">&minus;131.9&deg; &nbsp; +0.4&deg; &nbsp; +179.7&deg;</td></tr>
+  </table>
+  <table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Matched connector pair</td><td>holes 2 &amp; 3 (diagonal)</td></tr>
+    <tr><td>Per-hole alignment error</td><td class="num">1.16 mm</td></tr>
+    <tr><td>Body direction check (side)</td><td class="num">+0.050 (outward)</td></tr>
+  </table>
+</div>
+
+<h3>Mapped orca holes vs connector holes (mm)</h3>
+<table>
+  <tr><th>Orca hole (mapped)</th><th>Connector hole</th><th>Distance</th></tr>
+  <tr><td class="mono">(80.0, 153.9, 19.0)</td><td class="mono">(80.0, 155.0, 18.6)</td><td class="num">1.16 mm</td></tr>
+  <tr><td class="mono">(80.0, 121.9, 54.7)</td><td class="mono">(80.0, 120.8, 55.1)</td><td class="num">1.16 mm</td></tr>
+</table>
+
+<h3>Comparison with original URDF</h3>
+<table>
+  <tr><th></th><th>Original</th><th>Computed</th><th>&Delta;</th></tr>
+  <tr><td>x</td><td class="num">&minus;0.000607</td><td class="num">&minus;0.000644</td><td class="num">&minus;0.04 mm</td></tr>
+  <tr><td>y</td><td class="num">0.137176</td><td class="num">0.138410</td><td class="num">+1.2 mm</td></tr>
+  <tr><td>z</td><td class="num">0.036324</td><td class="num">0.036434</td><td class="num">+0.1 mm</td></tr>
+  <tr><td>roll</td><td class="num">&minus;2.318550</td><td class="num">&minus;2.301578</td><td class="num">+1.0&deg;</td></tr>
+  <tr><td>pitch</td><td class="num">0.000267</td><td class="num">0.006410</td><td class="num">+0.4&deg;</td></tr>
+  <tr><td>yaw</td><td class="num">&minus;3.139162</td><td class="num">3.136221</td><td class="num">&asymp; 0&deg; (wraps)</td></tr>
+</table>
+<p>This interface is very close to the original values &mdash; the main alignment
+correction was at the panda-connector interface.</p>
+
+<!-- ================================================================ -->
+<h2>6b. Right Hand &mdash; connector_mount &rarr; orcahand_world</h2>
+
+<div class="note note-blue">
+  <strong>Key insight: mirroring is not a rotation.</strong>
+  The left and right OrcaHand URDFs are mirror images of each other &mdash; the right
+  hand&rsquo;s <code>world</code> frame has its X-axis pointing opposite to the
+  left&rsquo;s. This is an improper transformation (det&nbsp;=&nbsp;&minus;1) that
+  cannot be represented as a URDF rotation. Therefore, the left hand&rsquo;s
+  <code>connector_mount&nbsp;&rarr;&nbsp;world</code> transform <strong>cannot</strong>
+  be reused for the right hand, even with sign flips on individual components.
+  The alignment must be recomputed from the right hand&rsquo;s own tower-camera mesh.
+</div>
+
+<h3>Right hand mounting geometry</h3>
+<p>The right hand&rsquo;s tower-camera mesh is transformed to its <code>world</code> frame
+using the right-hand URDF visual origin and the <code>world&rarr;right_tower</code> joint offset:</p>
+
+<pre><span class="cmt">// Visual origin (in right_tower frame)</span>
+xyz = (<span class="num">+0.04142</span>, <span class="num">0.05283</span>, <span class="num">-0.01986</span>)
+rpy = (<span class="num">-3.06601</span>, <span class="num">-1.08118</span>, <span class="num">-1.67624</span>)
+
+<span class="cmt">// world &rarr; right_tower joint</span>
+xyz = (<span class="num">+0.04</span>, <span class="num">0.0</span>, <span class="num">0.04575</span>)  rpy = (<span class="num">0</span>, <span class="num">0</span>, <span class="num">0</span>)</pre>
+
+<div class="card">
+  <div class="card-header">Right hand mounting face (in orca world frame)</div>
+  <table>
+    <tr><th>Face normal</th><td class="mono vec">(0, +0.022, +1.000)</td>
+        <td>&asymp; +Z</td></tr>
+    <tr><th>Face area</th><td class="num" colspan="2">7,336 mm&sup2;</td></tr>
+    <tr><th>Hole 0</th><td class="mono vec">(+80.45, +24.01, +0.12) mm</td>
+        <td>r = 3.03 mm</td></tr>
+    <tr><th>Hole 1</th><td class="mono vec">(+80.85, &minus;23.93, +0.12) mm</td>
+        <td>r = 2.99 mm</td></tr>
+    <tr><th>Hole spacing</th><td class="num" colspan="2">47.94 mm</td></tr>
+  </table>
+  <p><small>Note: the right hand holes are at +X (mirrored from the left hand&rsquo;s &minus;X).
+  The Y and Z coordinates, hole spacing, and radii are identical to the left hand.</small></p>
+</div>
+
+<div class="card">
+  <div class="card-header">Result (right hand) &nbsp;<span class="tag tag-ok">BEST FIT</span></div>
+  <table>
+    <tr><th>xyz</th><td class="mono">+0.160644 &nbsp; 0.138410 &nbsp; 0.036434</td></tr>
+    <tr><th>rpy</th><td class="mono">&minus;2.301578 &nbsp; &minus;0.006405 &nbsp; &minus;3.136215</td></tr>
+    <tr><th>rpy (deg)</th><td class="mono">&minus;131.9&deg; &nbsp; &minus;0.4&deg; &nbsp; &minus;179.7&deg;</td></tr>
+  </table>
+  <table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Matched connector pair</td><td>holes 2 &amp; 3 (diagonal)</td></tr>
+    <tr><td>Per-hole alignment error</td><td class="num">1.16 mm</td></tr>
+    <tr><td>Body direction check (side)</td><td class="num">+0.050 (outward)</td></tr>
+  </table>
+</div>
+
+<h3>Left vs Right transform comparison</h3>
+<table>
+  <tr><th></th><th>Left</th><th>Right</th><th>Relationship</th></tr>
+  <tr><td>x</td><td class="num">&minus;0.000644</td><td class="num">+0.160644</td>
+      <td>Shifted by +161.3&nbsp;mm (connector X extent)</td></tr>
+  <tr><td>y</td><td class="num">0.138410</td><td class="num">0.138410</td>
+      <td>Identical</td></tr>
+  <tr><td>z</td><td class="num">0.036434</td><td class="num">0.036434</td>
+      <td>Identical</td></tr>
+  <tr><td>roll</td><td class="num">&minus;2.301578</td><td class="num">&minus;2.301578</td>
+      <td>Identical</td></tr>
+  <tr><td>pitch</td><td class="num">+0.006410</td><td class="num">&minus;0.006405</td>
+      <td>Sign flipped (&asymp; &minus;pitch)</td></tr>
+  <tr><td>yaw</td><td class="num">+3.136221</td><td class="num">&minus;3.136215</td>
+      <td>Sign flipped (&asymp; &minus;yaw)</td></tr>
+</table>
+<p>The pitch and yaw sign flips are consistent with an X-axis reflection of the child frame.
+The X translation difference (+161.3&nbsp;mm) accounts for the mirrored tower position:
+the left tower is at X&nbsp;=&nbsp;&minus;0.04 in its world frame, the right at X&nbsp;=&nbsp;+0.04,
+so the world frame origin must shift to place the tower at the same physical location on the connector.</p>
+
+<!-- ================================================================ -->
+<h2>7. Known Limitation &mdash; Tower Mesh Penetration</h2>
+
+<div class="note">
+  <strong>Visual overlap at the connector-orca interface.</strong>
+  The OrcaHand tower-camera mesh extends 57&nbsp;mm above its mounting face (in the
+  +Z direction) but only 4&nbsp;mm below. Because the mate transform maps the mounting
+  face normal (+Z) to &minus;n<sub>OC</sub> (anti-parallel, for face-to-face contact),
+  the tower body (+Z) extends in the &minus;n<sub>OC</sub> direction &mdash; which passes
+  through the 6&nbsp;mm thick connector wall into the bracket&rsquo;s concave space.
+</div>
+
+<div class="card">
+  <div class="card-header">Penetration analysis</div>
+  <table>
+    <tr><th>Orca mesh extent above mounting face</th><td class="num">57.3 mm (97% of vertices)</td></tr>
+    <tr><th>Orca mesh extent below mounting face</th><td class="num">4.1 mm (3% of vertices)</td></tr>
+    <tr><th>Connector wall thickness</th><td class="num">5.98 mm</td></tr>
+    <tr><th>Orca +Z direction in connector frame</th><td class="mono">dot(+Z, n<sub>OC</sub>) = &minus;1.00</td></tr>
+    <tr><th>Result</th><td>Tower body passes through the 6&nbsp;mm wall</td></tr>
+  </table>
+</div>
+
+<h3>Why a simple offset doesn&rsquo;t fix it</h3>
+<p>The tower body extends 57&nbsp;mm along a direction that is almost exactly
+anti-parallel to the connector face normal. A translational offset along
+n<sub>OC</sub> shifts the entire orca assembly but cannot change the 57&nbsp;mm
+of body that passes through the wall. Both +n<sub>OC</sub> and &minus;n<sub>OC</sub>
+offsets were tested (3&ndash;8&nbsp;mm); neither significantly reduced penetration.</p>
+
+<h3>Why a rotation fix flips the hand to the wrong side</h3>
+<p>Negating the mounting-face normal (using &minus;Z instead of +Z) correctly places
+the tower body on the outside of the connector. However, this also flips the entire
+orca assembly &mdash; the fingers and palm end up on the opposite side of the bracket,
+which is physically incorrect.</p>
+
+<h3>Root cause</h3>
+<p>The tower-camera mesh serves double duty: it is both the <em>mounting interface</em>
+(bolt holes at the base, z&nbsp;&asymp;&nbsp;0) and a tall <em>structural tower</em>
+extending upward. In the assembled configuration the hand&rsquo;s fingers correctly
+extend from the bracket, but the tower structure necessarily passes through the
+connector wall. This is a geometric property of the mesh and the 90&deg; bracket
+configuration, not an alignment error.</p>
+
+<div class="note note-blue">
+  <strong>Recommendation:</strong> If the visual overlap is undesirable for rendering,
+  consider (a)&nbsp;splitting the tower-camera mesh into separate mounting-plate and
+  tower-body parts, or (b)&nbsp;using a clipping plane in the visualizer, or
+  (c)&nbsp;accepting the overlap as a cosmetic artifact of the URDF representation.
+</div>
+
+<!-- ================================================================ -->
+<h2>8. Final URDF Values</h2>
+
+<h3>Left hand (<code>fer_orcahand_left_extended.urdf</code>)</h3>
+<pre><span class="cmt">&lt;!-- Interface 1: Panda flange to connector (same for both hands) --&gt;</span>
+&lt;<span class="kw">joint</span> name=<span class="str">"fer_link8_to_connector_mount"</span> type=<span class="str">"fixed"</span>&gt;
+  &lt;parent link=<span class="str">"fer_link8"</span>/&gt;
+  &lt;child link=<span class="str">"connector_mount"</span>/&gt;
+  &lt;origin xyz=<span class="str">"0.033733 0.080000 0.002642"</span>
+          rpy=<span class="str">"2.389137 -0.000003 -1.570796"</span>/&gt;
+&lt;/joint&gt;
+
+<span class="cmt">&lt;!-- Interface 2: Connector to OrcaHand LEFT --&gt;</span>
+&lt;<span class="kw">joint</span> name=<span class="str">"connector_mount_to_orcahand_world"</span> type=<span class="str">"fixed"</span>&gt;
+  &lt;parent link=<span class="str">"connector_mount"</span>/&gt;
+  &lt;child link=<span class="str">"world"</span>/&gt;
+  &lt;origin xyz=<span class="str">"-0.000644 0.138410 0.036434"</span>
+          rpy=<span class="str">"-2.301578 0.006410 3.136221"</span>/&gt;
+&lt;/joint&gt;</pre>
+
+<h3>Right hand (<code>fer_orcahand_right_extended.urdf</code>)</h3>
+<pre><span class="cmt">&lt;!-- Interface 1: Panda flange to connector (same for both hands) --&gt;</span>
+&lt;<span class="kw">joint</span> name=<span class="str">"fer_link8_to_connector_mount"</span> type=<span class="str">"fixed"</span>&gt;
+  &lt;parent link=<span class="str">"fer_link8"</span>/&gt;
+  &lt;child link=<span class="str">"connector_mount"</span>/&gt;
+  &lt;origin xyz=<span class="str">"0.033733 0.080000 0.002642"</span>
+          rpy=<span class="str">"2.389137 -0.000003 -1.570796"</span>/&gt;
+&lt;/joint&gt;
+
+<span class="cmt">&lt;!-- Interface 2: Connector to OrcaHand RIGHT --&gt;</span>
+&lt;<span class="kw">joint</span> name=<span class="str">"connector_mount_to_orcahand_world"</span> type=<span class="str">"fixed"</span>&gt;
+  &lt;parent link=<span class="str">"connector_mount"</span>/&gt;
+  &lt;child link=<span class="str">"world"</span>/&gt;
+  &lt;origin xyz=<span class="str">"0.160644 0.138410 0.036434"</span>
+          rpy=<span class="str">"-2.301578 -0.006405 -3.136215"</span>/&gt;
+&lt;/joint&gt;</pre>
+
+<!-- ================================================================ -->
+<h2>9. Symmetry &amp; Ambiguity Notes</h2>
+
+<div class="card">
+  <div class="card-header">Sources of ambiguity</div>
+  <table>
+    <tr><th>Type</th><th>Description</th><th>Resolution</th></tr>
+    <tr>
+      <td>180&deg; flip</td>
+      <td>Two ways to mate faces (A/B flip modes)</td>
+      <td>Connector centroid must be in +Z from link8; orca body must extend outward</td>
+    </tr>
+    <tr>
+      <td>4-fold bolt symmetry</td>
+      <td>Square bolt pattern &rarr; 4 valid rotations</td>
+      <td>Match orca-face bend direction to existing URDF orientation</td>
+    </tr>
+    <tr>
+      <td>Hole pairing (orca)</td>
+      <td>2 orca holes vs 6 possible pairs from 4 connector holes</td>
+      <td>Select pair with spacing closest to orca hole spacing (47.94 vs 50.00&nbsp;mm)</td>
+    </tr>
+    <tr>
+      <td>Left/right mirroring</td>
+      <td>Left and right hand URDFs use mirrored coordinate frames (X-axis flipped).
+          This is an improper transformation (det&nbsp;=&nbsp;&minus;1) that cannot be
+          expressed as a URDF rotation.</td>
+      <td>Recompute the <code>connector&nbsp;&rarr;&nbsp;world</code> transform from
+          scratch using the correct hand&rsquo;s tower-camera mesh and world-to-tower
+          offset. Do <strong>not</strong> attempt to derive the right hand transform by
+          sign-flipping components of the left hand transform.</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ================================================================ -->
+<h2>10. Script Reference</h2>
+
+<p>All computations are in <code>scripts/compute_alignment.py</code>. The script supports
+both left and right hand configurations via the <code>--hand</code> flag:</p>
+<pre>cd pandaorca_description &amp;&amp; python3 scripts/compute_alignment.py --hand left
+cd pandaorca_description &amp;&amp; python3 scripts/compute_alignment.py --hand right</pre>
+
+<p>Dependencies: <code>numpy</code>, <code>scipy</code>, <code>trimesh</code></p>
+
+<hr style="margin-top: 2rem;">
+<p style="color: var(--muted); font-size: .85rem; margin-top: 1rem;">
+  Generated by mesh alignment analysis pipeline.
+  See <code>scripts/compute_alignment.py</code> for source.
+</p>
+
+</body>
+</html>
