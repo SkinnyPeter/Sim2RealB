@@ -1,0 +1,15 @@
+cd /local/home/teamb/Desktop/Real2Sim
+~/isaac-sim/python.sh main.py
+
+cd /local/home/teamb/Desktop/Real2Sim
+~/isaac-sim/python.sh src/create_scene.py
+
+cd /local/home/teamb/Desktop/Real2Sim
+~/isaac-sim/python.sh src/replay_trajectories.py
+
+cd ~/isaac-sim
+./isaac-sim.sh
+
+data path: "/local/home/teamb/Desktop/data/20250827_151212.h5"
+
+python3 src/view_h5_video.py

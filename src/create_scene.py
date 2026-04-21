@@ -190,14 +190,7 @@ def main():
     else:
         print(f"WARNING: right robot USD not found: {RIGHT_ROBOT_USD}")
 
-    # Visualization Loop
-    if VISUALIZE:
-        print("Visualization mode active. Close the window or press Ctrl+C to exit.")
-        try:
-            while simulation_app.is_running():
-                simulation_app.update()
-        except KeyboardInterrupt:
-            pass
+
         
     # ── OBJECTS ────────────────────────────────────────────────────────────
     # rubber_duck.usd is in millimetres — scale down to metres
@@ -211,7 +204,7 @@ def main():
     if BALL_USD.exists():
         ball = add_reference(stage, "/World/ball", BALL_USD)
         ball.SetInstanceable(False)
-        set_xform(ball, translate=(0.0, -0.35, 0.77))
+        set_xform(ball, translate=(0.0, -0.35, 0.77), scale=(0.001, 0.001, 0.001))
     else:
         print(f"WARNING: ball.usd not found: {BALL_USD}")
 
@@ -220,7 +213,19 @@ def main():
     if not ctx.save_as_stage(str(OUTPUT_SCENE)):
         raise RuntimeError(f"Could not save scene to: {OUTPUT_SCENE}")
     print(f"\nScene saved to: {OUTPUT_SCENE}")
+
+    # Visualization Loop
+    if VISUALIZE:
+        print("Visualization mode active. Close the window or press Ctrl+C to exit.")
+        try:
+            while simulation_app.is_running():
+                simulation_app.update()
+        except KeyboardInterrupt:
+            pass
+
     simulation_app.close()
+
+
 
 
 if __name__ == "__main__":
