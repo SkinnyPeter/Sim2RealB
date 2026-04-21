@@ -9,20 +9,7 @@ import omni.usd
 import h5py
 import numpy as np
 import time
-import torch
 from pathlib import Path
-
-try:
-    from curobo.types.base import TensorDeviceType
-    from curobo.types.math import Pose as CuroboPose
-    from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-    from curobo.types.robot import RobotConfig
-    from curobo.util_file import get_robot_configs_path, join_path, load_yaml
-    _CUROBO_AVAILABLE = True
-except ImportError:
-    _CUROBO_AVAILABLE = False
-
-from src.ik_pk_adam import build_pk_chain, pk_adam_ik_batch
 
 from pxr import Gf, UsdGeom, UsdPhysics
 
@@ -135,8 +122,6 @@ class Simulator:
         set_joints   = getattr(sim_config, "set_joints",   True)
         enable_right = getattr(sim_config, "enable_right", True)
         enable_left  = getattr(sim_config, "enable_left",  True)
-        ik_solver    = getattr(sim_config, "ik_solver",    "lula")
-        num_seeds    = getattr(sim_config, "num_seeds",    32)
         open_stage(self.stage_path)
         world = World()
 
@@ -192,41 +177,6 @@ class Simulator:
             urdf_path=PANDA_ARM_URDF_PATH,
         )
 
-
-        # ===== curobo IK solver setup =====
-        if ik_solver == "curobo":
-            if not _CUROBO_AVAILABLE:
-                raise RuntimeError("curobo is not installed — set IK_SOLVER='lula' or install curobo first.")
-            tensor_args = TensorDeviceType()
-            franka_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
-            ik_config = IKSolverConfig.load_from_robot_config(
-                RobotConfig.from_dict(franka_cfg, tensor_args=tensor_args),
-                tensor_args=tensor_args,
-                num_seeds=num_seeds,
-                position_threshold=0.005,
-                rotation_threshold=0.05,
-            )
-            curobo_solver_r = IKSolver(ik_config)
-            curobo_solver_l = IKSolver(ik_config)
-            print(f"curobo IK solver ready (num_seeds={num_seeds})")
-            # Initialize seeds to franka home pose so CUDA graph is captured with non-None tensors
-            # on frame 0 — subsequent frames update in-place (.copy_()) without breaking the graph.
-            # Solver DOF=7 (fingers are locked in franka.yml, excluded from optimization).
-            _dev = tensor_args.device
-            _home = torch.tensor([[0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0]], dtype=torch.float32, device=_dev)
-            prev_retract_r = _home.clone()           # (1, 7)
-            prev_retract_l = _home.clone()
-            prev_q_r = _home.unsqueeze(0).clone()    # (1, 1, 7)
-            prev_q_l = _home.unsqueeze(0).clone()
-
-        # ===== pk_adam IK solver setup =====
-        if ik_solver == "pk_adam":
-            _dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            pk_chain = build_pk_chain(PANDA_ARM_URDF_PATH, _dev)
-            _home_pk = torch.tensor([0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0], dtype=torch.float32, device=_dev)
-            pk_q_prev_r = _home_pk.clone()
-            pk_q_prev_l = _home_pk.clone()
-            print(f"pytorch_kinematics FK chain ready on {_dev}: {pk_chain.get_joint_parameter_names()}")
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -303,104 +253,37 @@ class Simulator:
             # ===== Compute arm IK =====
             ARM_JOINT_INDICES = list(range(7))
 
-            if ik_solver == "lula":
-                if enable_right:
-                    arm_joints_r, ik_success_r = kin_solver_r.compute_inverse_kinematics(
-                        frame_name="panda_hand",
-                        target_position=pos_r.astype(np.float64),
-                        target_orientation=quat_world_wxyz_r,
-                        warm_start=prev_arm_joints_r,
-                    )
-                    if set_joints:
-                        if ik_success_r:
-                            prev_arm_joints_r = arm_joints_r.copy()
-                            arm_right.set_joint_positions(arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                        else:
-                            ik_fail_r += 1
-                            arm_right.set_joint_positions(prev_arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            print(f"[frame {frame}] IK failed RIGHT")
-
-                if enable_left:
-                    arm_joints_l, ik_success_l = kin_solver_l.compute_inverse_kinematics(
-                        frame_name="panda_hand",
-                        target_position=pos_l.astype(np.float64),
-                        target_orientation=quat_world_wxyz_l,
-                        warm_start=prev_arm_joints_l,
-                    )
-                    if set_joints:
-                        if ik_success_l:
-                            prev_arm_joints_l = arm_joints_l.copy()
-                            arm_left.set_joint_positions(arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                        else:
-                            ik_fail_l += 1
-                            arm_left.set_joint_positions(prev_arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            print(f"[frame {frame}] IK failed LEFT")
-
-            elif ik_solver == "curobo":
-                # curobo uses wxyz quaternion convention; cur_quat_* is xyzw — reorder
-                if enable_right:
-                    quat_wxyz_r = torch.tensor([[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]], dtype=torch.float32, device=_dev)
-                    pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev)
-                    goal_r = CuroboPose(position=pos_t_r, quaternion=quat_wxyz_r)
-                    result_r = curobo_solver_r.solve_single(goal_r, retract_config=prev_retract_r, seed_config=prev_q_r)
-                    ik_success_r = bool(result_r.success[0])
-                    if set_joints:
-                        if ik_success_r:
-                            q_arm_r = result_r.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
-                            arm_right.set_joint_positions(q_arm_r.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            prev_retract_r.copy_(q_arm_r.unsqueeze(0))
-                            prev_q_r.copy_(q_arm_r.unsqueeze(0).unsqueeze(0))
-                        else:
-                            ik_fail_r += 1
-                            print(f"[frame {frame}] IK failed RIGHT")
-
-                if enable_left:
-                    quat_wxyz_l = torch.tensor([[cur_quat_l[3], cur_quat_l[0], cur_quat_l[1], cur_quat_l[2]]], dtype=torch.float32, device=_dev)
-                    pos_t_l = torch.tensor([pos_l.tolist()], dtype=torch.float32, device=_dev)
-                    goal_l = CuroboPose(position=pos_t_l, quaternion=quat_wxyz_l)
-                    result_l = curobo_solver_l.solve_single(goal_l, retract_config=prev_retract_l, seed_config=prev_q_l)
-                    ik_success_l = bool(result_l.success[0])
-                    if set_joints:
-                        if ik_success_l:
-                            q_arm_l = result_l.js_solution.position[0].reshape(-1)[:7]  # solver dof=7 (fingers locked)
-                            arm_left.set_joint_positions(q_arm_l.cpu().numpy().astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            prev_retract_l.copy_(q_arm_l.unsqueeze(0))
-                            prev_q_l.copy_(q_arm_l.unsqueeze(0).unsqueeze(0))
-                        else:
-                            ik_fail_l += 1
-                            print(f"[frame {frame}] IK failed LEFT")
-
-            elif ik_solver == "pk_adam":
-                # Build batch: only include enabled arms
-                _pk_targets, _pk_warms, _pk_labels = [], [], []
-                if enable_right:
-                    _pk_targets.append((pos_r, cur_quat_r))
-                    _pk_warms.append(pk_q_prev_r)
-                    _pk_labels.append("right")
-                if enable_left:
-                    _pk_targets.append((pos_l, cur_quat_l))
-                    _pk_warms.append(pk_q_prev_l)
-                    _pk_labels.append("left")
-
-                _pk_results = pk_adam_ik_batch(pk_chain, _pk_targets, _pk_warms, _dev)
-
-                for _label, (q_np, ik_ok) in zip(_pk_labels, _pk_results):
-                    if _label == "right":
-                        pk_q_prev_r = torch.tensor(q_np, dtype=torch.float32, device=_dev)
-                        if set_joints:
-                            if ik_ok:
-                                arm_right.set_joint_positions(q_np.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            else:
-                                ik_fail_r += 1
-                                print(f"[frame {frame}] IK failed RIGHT")
+            if enable_right:
+                arm_joints_r, ik_success_r = kin_solver_r.compute_inverse_kinematics(
+                    frame_name="panda_hand",
+                    target_position=pos_r.astype(np.float64),
+                    target_orientation=quat_world_wxyz_r,
+                    warm_start=prev_arm_joints_r,
+                )
+                if set_joints:
+                    if ik_success_r:
+                        prev_arm_joints_r = arm_joints_r.copy()
+                        arm_right.set_joint_positions(arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                     else:
-                        pk_q_prev_l = torch.tensor(q_np, dtype=torch.float32, device=_dev)
-                        if set_joints:
-                            if ik_ok:
-                                arm_left.set_joint_positions(q_np.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
-                            else:
-                                ik_fail_l += 1
-                                print(f"[frame {frame}] IK failed LEFT")
+                        ik_fail_r += 1
+                        arm_right.set_joint_positions(prev_arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                        print(f"[frame {frame}] IK failed RIGHT")
+
+            if enable_left:
+                arm_joints_l, ik_success_l = kin_solver_l.compute_inverse_kinematics(
+                    frame_name="panda_hand",
+                    target_position=pos_l.astype(np.float64),
+                    target_orientation=quat_world_wxyz_l,
+                    warm_start=prev_arm_joints_l,
+                )
+                if set_joints:
+                    if ik_success_l:
+                        prev_arm_joints_l = arm_joints_l.copy()
+                        arm_left.set_joint_positions(arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                    else:
+                        ik_fail_l += 1
+                        arm_left.set_joint_positions(prev_arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
+                        print(f"[frame {frame}] IK failed LEFT")
 
             # ===== EEF visualization =====
             VIZ_OFFSET = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # 1 m up for unobstructed inspection

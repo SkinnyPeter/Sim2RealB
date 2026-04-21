@@ -11,8 +11,6 @@ class SimConfig:
     set_joints:       bool  = True
     enable_right:     bool  = True
     enable_left:      bool  = True
-    ik_solver:        str   = "lula"  # "lula", "curobo", or "pk_adam"
-    num_seeds:        int   = 32        # curobo IK seeds (more = more stable, higher GPU cost)
     camera_eye:    tuple = (1.97035, 0.00915, 1.58108)  # viewport camera position
     camera_target: tuple = (0.51, 0.0, 1.23)           # look-at point; set both to None to skip
 
@@ -26,8 +24,6 @@ SIM = SimConfig(
     set_joints   = True,
     enable_right = True,
     enable_left  = True,
-    ik_solver    = "lula",  # "lula", "curobo", or "pk_adam"
-    num_seeds    = 128,
 )
 
 VIS = VisConfig(
