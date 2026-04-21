@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 # /object_in_bowl_processed_50hz.20250804_175047.h5
-data_path = BASE_DIR / "data" / "20250804_175047.h5" # This one is from object_in_bowl_processed_50hz
+data_path = BASE_DIR / "data" / "20250827_151212.h5" # This one is from object_in_bowl_processed_50hz
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 data_path = str(data_path)

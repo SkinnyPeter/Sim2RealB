@@ -1,38 +1,48 @@
-# Place all isaasim related imports here (need to be imported first)
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
 from isaacsim.robot_motion.motion_generation import (
-    ArticulationKinematicsSolver,
     LulaKinematicsSolver,
 )
 import isaacsim.robot_motion.motion_generation as _mg_pkg
 
-# Place all imports external to isaac here
-try:
-    import omni.usd
-    import numpy as np
-    import time
-    from pathlib import Path
-
-    import torch
-    from curobo.types.base import TensorDeviceType
-    from curobo.types.math import Pose as CuroboPose
-    from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-    from curobo.types.robot import RobotConfig
-    from curobo.util_file import get_robot_configs_path, join_path, load_yaml
-
-except ImportError as e:
-    raise RuntimeError(f"ERROR while importing module: {e}")
+import omni.usd
+import h5py
+import numpy as np
+import time
+from pathlib import Path
 
 from pxr import UsdPhysics
 
 # For debugging purposes
 DEBUG = True
 PLAY_HAND = False
-PLAY_OBJECT = False # TODO: set the object coordinates on the loop
+PLAY_OBJECT = False
 
-ISAACSIM_ROOT = Path.home() / "isaac-sim"
+# Rx(180°) quaternion in wxyz — converts tool convention (Z-down) to URDF convention (Z-forward)
+_Q_RX180 = np.array([0.0, 1.0, 0.0, 0.0])
+
+
+def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ], dtype=np.float64)
+
+
+def _quat_to_rot(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q / np.linalg.norm(q)
+    return np.array([
+        [1-2*(y*y+z*z), 2*(x*y-w*z),   2*(x*z+w*y)  ],
+        [2*(x*y+w*z),   1-2*(x*x+z*z), 2*(y*z-w*x)  ],
+        [2*(x*z-w*y),   2*(y*z+w*x),   1-2*(x*x+y*y)],
+    ])
+
+
 from src.visualization import (
     EEFVisualizer,
     VisConfig,
@@ -134,7 +144,6 @@ class Simulator:
         """
         Minimal play method for debug purposes
         """
-        import h5py
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
             left_hand_q  = np.array(f["observations/qpos_hand_left"], dtype=np.float32)
@@ -191,12 +200,9 @@ class Simulator:
         """
         Play the entire simulation
         """
-        import h5py
-
         set_joints = getattr(sim_config, "set_joints", True)
         enable_right = getattr(sim_config, "enable_right", True)
         enable_left = getattr(sim_config, "enable_left", True)
-        num_seeds = getattr(sim_config, "num_seeds", 32)
 
         open_stage(self.stage_path)
         world = World()
@@ -236,40 +242,29 @@ class Simulator:
                 self._print_articulation_info(hand_left, "LEFT HAND")
 
         # ===== Arm base positions in world frame =====
-        # The initial EEF position after the scene is created, it needs to be translated by T_flange_EEF
-        # This is only used for visualization purposes
-        base_pos_r, _ = arm_right.get_world_pose() + T_flange_EEF
-        base_pos_l, _ = arm_left.get_world_pose() + T_flange_EEF
+        base_pos_r, _ = arm_right.get_world_pose()
+        base_pos_l, _ = arm_left.get_world_pose()
+        base_pos_r = np.asarray(base_pos_r, dtype=np.float64).flatten()
+        base_pos_l = np.asarray(base_pos_l, dtype=np.float64).flatten()
 
         # ===== EEF prim handles for actual pose readback =====
         # TODO: panda_hand is not the actual EEF - change this and also the create_clean_scene so it deactivate panda_hand
         eef_prim_r = XFormPrim("/World/Franka_right/panda_hand")
         eef_prim_l = XFormPrim("/World/Franka_left/panda_hand")
 
-        # ===== curobo IK solver setup =====
-        tensor_args = TensorDeviceType()
-        franka_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
-        ik_config = IKSolverConfig.load_from_robot_config(
-            RobotConfig.from_dict(franka_cfg, tensor_args=tensor_args),
-            tensor_args=tensor_args,
-            num_seeds=num_seeds,
-            position_threshold=0.005,
-            rotation_threshold=0.05,
+        # ===== Lula IK solver setup =====
+        kin_solver_r = LulaKinematicsSolver(
+            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
+            urdf_path=PANDA_ARM_URDF_PATH,
         )
-        curobo_solver_r = IKSolver(ik_config)
-        curobo_solver_l = IKSolver(ik_config)
-        print(f"curobo IK solver ready (num_seeds={num_seeds})")
+        kin_solver_l = LulaKinematicsSolver(
+            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
+            urdf_path=PANDA_ARM_URDF_PATH,
+        )
 
-        _dev = tensor_args.device
-        _home = torch.tensor(
-            [[0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0]],
-            dtype=torch.float32,
-            device=_dev,
-        )
-        prev_retract_r = _home.clone()
-        prev_retract_l = _home.clone()
-        prev_q_r = _home.unsqueeze(0).clone()
-        prev_q_l = _home.unsqueeze(0).clone()
+        _home_arm = np.array([0.0, -1.3, 0.0, -2.5, 0.0, 1.0, 0.0], dtype=np.float64)
+        prev_arm_joints_r = _home_arm.copy()
+        prev_arm_joints_l = _home_arm.copy()
 
         # ===== Load dataset =====
         with h5py.File(self.h5_path, "r") as f:
@@ -336,25 +331,17 @@ class Simulator:
             pos_r = np.asarray(right_positions[frame], dtype=np.float32)
             pos_l = np.asarray(left_positions[frame], dtype=np.float32)
 
-            # H5 stores quaternions as wxyz; convert to xyzw
-            q_raw_r = np.asarray(right_quaternions[frame], dtype=np.float32)
-            q_raw_l = np.asarray(left_quaternions[frame], dtype=np.float32)
-
-            quat_r = np.array([q_raw_r[1], q_raw_r[2], q_raw_r[3], q_raw_r[0]], dtype=np.float32)
-            quat_r /= np.linalg.norm(quat_r)
-
-            quat_l = np.array([q_raw_l[1], q_raw_l[2], q_raw_l[3], q_raw_l[0]], dtype=np.float32)
-            quat_l /= np.linalg.norm(quat_l)
-
-            quat_r_flip = np.array(
-                [quat_r[3], quat_r[2], -quat_r[1], -quat_r[0]], dtype=np.float32
-            )
-            quat_l_flip = np.array(
-                [quat_l[3], quat_l[2], -quat_l[1], -quat_l[0]], dtype=np.float32
-            )
-
-            cur_quat_r = quat_r_flip
-            cur_quat_l = quat_l_flip
+            # H5 stores quaternions as wxyz; apply Rx(180°) to convert tool→URDF convention
+            q_raw_r = np.asarray(right_quaternions[frame], dtype=np.float64)
+            q_raw_l = np.asarray(left_quaternions[frame], dtype=np.float64)
+            q_raw_r /= np.linalg.norm(q_raw_r)
+            q_raw_l /= np.linalg.norm(q_raw_l)
+            # World-frame wxyz after tool→URDF rotation (used for IK and visualization)
+            quat_world_wxyz_r = _quat_mul(_Q_RX180, q_raw_r)
+            quat_world_wxyz_l = _quat_mul(_Q_RX180, q_raw_l)
+            # xyzw for visualization helpers that expect xyzw
+            cur_quat_r = np.array([quat_world_wxyz_r[1], quat_world_wxyz_r[2], quat_world_wxyz_r[3], quat_world_wxyz_r[0]], dtype=np.float32)
+            cur_quat_l = np.array([quat_world_wxyz_l[1], quat_world_wxyz_l[2], quat_world_wxyz_l[3], quat_world_wxyz_l[0]], dtype=np.float32)
 
             ARM_JOINT_INDICES = list(range(7))
 
@@ -370,76 +357,48 @@ class Simulator:
                 if not np.isfinite(q_hand_l).all():
                     print(f"[frame {frame}] left hand has NaN/inf:", q_hand_l)
                     break
-                    
-                # TODO: Is this setting joints two times??
-                hand_right.set_joint_positions(q_hand_r)
-                hand_left.set_joint_positions(q_hand_l)
-                
+
                 ok_r = self._safe_set_joints(hand_right, q_hand_r, "RIGHT HAND")
                 ok_l = self._safe_set_joints(hand_left, q_hand_l, "LEFT HAND")
 
-            # Curobo IK Solver
+            # Back-project EEF → flange: no rotation offset between flange and ORCA hand,
+            # so flange orientation = EEF orientation; only position needs adjustment.
+            R_r = _quat_to_rot(quat_world_wxyz_r)
+            R_l = _quat_to_rot(quat_world_wxyz_l)
+            flange_pos_r = pos_r.astype(np.float64) - R_r @ T_flange_EEF
+            flange_pos_l = pos_l.astype(np.float64) - R_l @ T_flange_EEF
+
+            # ===== Lula IK Solver =====
             if enable_right:
-                # Convert EEF Numpy into Torch so its on the same device
-                T_flange_EEF_t = torch.tensor(
-                    T_flange_EEF, dtype=torch.float32, device=_dev
+                arm_joints_r, ik_success_r = kin_solver_r.compute_inverse_kinematics(
+                    frame_name="panda_hand",
+                    target_position=flange_pos_r,
+                    target_orientation=quat_world_wxyz_r,
+                    warm_start=prev_arm_joints_r,
                 )
-                # Goal EEF position / quats
-                pos_t_r = torch.tensor([pos_r.tolist()], dtype=torch.float32, device=_dev) - T_flange_EEF_t
-                quat_wxyz_r = torch.tensor(
-                    [[cur_quat_r[3], cur_quat_r[0], cur_quat_r[1], cur_quat_r[2]]],
-                    dtype=torch.float32,
-                    device=_dev,
-                )
-                goal_r = CuroboPose(position=pos_t_r, quaternion=quat_wxyz_r)
-
-                #
-                result_r = curobo_solver_r.solve_single(
-                    goal_r,
-                    retract_config=prev_retract_r,
-                    seed_config=prev_q_r,
-                )
-                ik_success_r = bool(result_r.success[0])
-
                 if set_joints:
                     if ik_success_r:
-                        q_arm_r = result_r.js_solution.position[0].reshape(-1)[:7]
-                        arm_right.set_joint_positions(
-                            q_arm_r.cpu().numpy().astype(np.float32),
-                            joint_indices=ARM_JOINT_INDICES,
-                        )
-                        prev_retract_r.copy_(q_arm_r.unsqueeze(0))
-                        prev_q_r.copy_(q_arm_r.unsqueeze(0).unsqueeze(0))
+                        prev_arm_joints_r = arm_joints_r.copy()
+                        arm_right.set_joint_positions(arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                     else:
                         ik_fail_r += 1
+                        arm_right.set_joint_positions(prev_arm_joints_r.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                         print(f"[frame {frame}] IK failed RIGHT")
-            # TODO: the solver need to take the EEF position - T_flange_EEF
-            if enable_left:
-                quat_wxyz_l = torch.tensor(
-                    [[cur_quat_l[3], cur_quat_l[0], cur_quat_l[1], cur_quat_l[2]]],
-                    dtype=torch.float32,
-                    device=_dev,
-                )
-                pos_t_l = torch.tensor([pos_l.tolist()], dtype=torch.float32, device=_dev)
-                goal_l = CuroboPose(position=pos_t_l, quaternion=quat_wxyz_l)
-                result_l = curobo_solver_l.solve_single(
-                    goal_l,
-                    retract_config=prev_retract_l,
-                    seed_config=prev_q_l,
-                )
-                ik_success_l = bool(result_l.success[0])
 
+            if enable_left:
+                arm_joints_l, ik_success_l = kin_solver_l.compute_inverse_kinematics(
+                    frame_name="panda_hand",
+                    target_position=flange_pos_l,
+                    target_orientation=quat_world_wxyz_l,
+                    warm_start=prev_arm_joints_l,
+                )
                 if set_joints:
                     if ik_success_l:
-                        q_arm_l = result_l.js_solution.position[0].reshape(-1)[:7]
-                        arm_left.set_joint_positions(
-                            q_arm_l.cpu().numpy().astype(np.float32),
-                            joint_indices=ARM_JOINT_INDICES,
-                        )
-                        prev_retract_l.copy_(q_arm_l.unsqueeze(0))
-                        prev_q_l.copy_(q_arm_l.unsqueeze(0).unsqueeze(0))
+                        prev_arm_joints_l = arm_joints_l.copy()
+                        arm_left.set_joint_positions(arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                     else:
                         ik_fail_l += 1
+                        arm_left.set_joint_positions(prev_arm_joints_l.astype(np.float32), joint_indices=ARM_JOINT_INDICES)
                         print(f"[frame {frame}] IK failed LEFT")
 
             VIZ_OFFSET = np.array([0.0, 0.0, 1.0], dtype=np.float32)
