@@ -217,10 +217,10 @@ class Simulator:
 
         # ===== Franka robots from stage =====
         arm_right = world.scene.add(
-            SingleArticulation("/World/Franka_right", name="franka_right")
+            SingleArticulation("/World/fer_orcahand_right_extended", name="franka_right")
         )
         arm_left = world.scene.add(
-            SingleArticulation("/World/Franka_left", name="franka_left")
+            SingleArticulation("/World/fer_orcahand_left_extended", name="franka_left")
         )
 
         if PLAY_HAND:
@@ -247,11 +247,14 @@ class Simulator:
         base_pos_r = np.asarray(base_pos_r, dtype=np.float64).flatten()
         base_pos_l = np.asarray(base_pos_l, dtype=np.float64).flatten()
 
-        # ===== EEF prim handles for actual pose readback =====
-        # TODO: panda_hand is not the actual EEF - change this and also the create_clean_scene so it deactivate panda_hand
-        eef_prim_r = XFormPrim("/World/Franka_right/panda_hand")
-        eef_prim_l = XFormPrim("/World/Franka_left/panda_hand")
-
+        # TODO: find the correct prim path for fer_link8 (flange) in the combined USD.
+        # fer_link8 is an empty link in the URDF so Isaac Sim may not create a USD prim for it.
+        # Disabled for now — only needed when visualization is enabled.
+        # eef_prim_r = XFormPrim("/World/fer_orcahand_right_extended/fer_link8")
+        # eef_prim_l = XFormPrim("/World/fer_orcahand_left_extended/fer_link8")
+        eef_prim_r = None
+        eef_prim_l = None
+        
         # ===== Lula IK solver setup =====
         kin_solver_r = LulaKinematicsSolver(
             robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
