@@ -42,7 +42,8 @@ PANDA_ARM_URDF_PATH = str(
 
 FRANKA_RIGHT_PATH = "/World/fer_orcahand_right_extended"
 FRANKA_LEFT_PATH = "/World/fer_orcahand_left_extended"
-EE_FRAME_NAME = "panda_hand"
+EE_FRAME_NAME = "panda_hand"   # frame name in the plain Franka URDF, used by LulaKinematicsSolver
+EE_USD_PRIM_NAME = "fer_link8" # prim name in the USD scene (orca-hand robot uses fer_ prefix)
 # TODO: update to exact measured flange→orca-wrist offset vector
 EE_FLANGE_TO_EEF_OFFSET = np.array([0.13, 0.0, 0.07], dtype=np.float32)
 Q_TOOL_TO_URDF_WXYZ = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)  # Rx(180°)
@@ -325,10 +326,10 @@ class Simulator:
         eef_prim_l = None
         if visualizer is not None:
             eef_prim_r = XFormPrim(
-                self._resolve_descendant_prim_path(stage, FRANKA_RIGHT_PATH, EE_FRAME_NAME)
+                self._resolve_descendant_prim_path(stage, FRANKA_RIGHT_PATH, EE_USD_PRIM_NAME)
             )
             eef_prim_l = XFormPrim(
-                self._resolve_descendant_prim_path(stage, FRANKA_LEFT_PATH, EE_FRAME_NAME)
+                self._resolve_descendant_prim_path(stage, FRANKA_LEFT_PATH, EE_USD_PRIM_NAME)
             )
 
         prev_arm_r = arm_right.get_joint_positions()[arm_idx_r].copy()
