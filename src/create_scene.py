@@ -25,8 +25,6 @@ DESCRIPTION_ROOT = Path(
 
 LEFT_ROBOT_USD  = DESCRIPTION_ROOT / "usd" / "fer_orcahand_left_extended"  / "fer_orcahand_left_extended.usd"
 RIGHT_ROBOT_USD = DESCRIPTION_ROOT / "usd" / "fer_orcahand_right_extended" / "fer_orcahand_right_extended.usd"
-RUBBER_DUCK_USD = BASE_DIR / "assets" / "objects" / "rubber_duck.usd"
-BALL_USD        = BASE_DIR / "assets" / "objects" / "ball.usd"
 OUTPUT_SCENE    = BASE_DIR / "scenes" / "scene.usd"
 
 # Cameras 
@@ -190,7 +188,13 @@ def main():
     else:
         print(f"WARNING: right robot USD not found: {RIGHT_ROBOT_USD}")
 
-    # Visualization Loop
+    # Save
+    OUTPUT_SCENE.parent.mkdir(parents=True, exist_ok=True)
+    if not ctx.save_as_stage(str(OUTPUT_SCENE)):
+        raise RuntimeError(f"Could not save scene to: {OUTPUT_SCENE}")
+    print(f"\nScene saved to: {OUTPUT_SCENE}")
+
+    # Visualization loop runs after save so the scene is always written correctly
     if VISUALIZE:
         print("Visualization mode active. Close the window or press Ctrl+C to exit.")
         try:
@@ -198,28 +202,7 @@ def main():
                 simulation_app.update()
         except KeyboardInterrupt:
             pass
-        
-    # ── OBJECTS ────────────────────────────────────────────────────────────
-    # rubber_duck.usd is in millimetres — scale down to metres
-    if RUBBER_DUCK_USD.exists():
-        duck = add_reference(stage, "/World/rubber_duck", RUBBER_DUCK_USD)
-        duck.SetInstanceable(False)
-        set_xform(duck, translate=(0.0, 0.35, 0.77), scale=(0.001, 0.001, 0.001))
-    else:
-        print(f"WARNING: rubber_duck.usd not found: {RUBBER_DUCK_USD}")
 
-    if BALL_USD.exists():
-        ball = add_reference(stage, "/World/ball", BALL_USD)
-        ball.SetInstanceable(False)
-        set_xform(ball, translate=(0.0, -0.35, 0.77))
-    else:
-        print(f"WARNING: ball.usd not found: {BALL_USD}")
-
-    # Save
-    OUTPUT_SCENE.parent.mkdir(parents=True, exist_ok=True)
-    if not ctx.save_as_stage(str(OUTPUT_SCENE)):
-        raise RuntimeError(f"Could not save scene to: {OUTPUT_SCENE}")
-    print(f"\nScene saved to: {OUTPUT_SCENE}")
     simulation_app.close()
 
 
