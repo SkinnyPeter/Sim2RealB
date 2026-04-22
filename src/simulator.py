@@ -22,12 +22,20 @@ from src.visualization import (
 )
 
 
-# OpenCV (Y-down, Z-forward) -> Isaac Sim / USD (Y-up, Z-backward)
-CV2USD = np.array([
-    [1,  0,  0,  0],
-    [0, -1,  0,  0],
-    [0,  0, -1,  0],
-    [0,  0,  0,  1],
+# Camera-to-world transforms (T_base_in_world @ best_calib["cam"]) from compute_camera_transform.py.
+# Each matrix maps a point in that camera's OpenCV frame to the USD world frame.
+T_CAM_LEFT_WORLD = np.array([
+    [-0.02199727, -0.80581615,  0.59175708, -0.04596533],
+    [-0.99905014,  0.03998766,  0.01731508,  0.09513673],
+    [-0.03761575, -0.59081411, -0.80593036,  1.20379187],
+    [ 0.,          0.,          0.,          1.        ],
+], dtype=np.float64)
+
+T_CAM_RIGHT_WORLD = np.array([
+    [ 0.02933941, -0.83227828,  0.55358113, -0.07484866],
+    [-0.99642232,  0.01956109,  0.08221870, -0.00350517],
+    [-0.07925749, -0.55401284, -0.82872675,  1.23895363],
+    [ 0.,          0.,          0.,          1.        ],
 ], dtype=np.float64)
 
 import isaacsim.robot_motion.motion_generation as _mg_pkg
@@ -296,17 +304,33 @@ class Simulator:
             n_frames = min(n_frames, len(left_hand_data))
 
         # Object trajectory (.npy of shape (N, 4, 4), ob_in_cam, OpenCV convention)
-        object_traj = None
         obj_prim = None
+        object_traj = None
         trajectory_npy = getattr(sim_config, "trajectory_npy", None)
         object_prim_path = getattr(sim_config, "object_prim_path", "/World/rubber_duck")
+        object_usd_path = getattr(sim_config, "object_usd_path", None)
+        object_scale = getattr(sim_config, "object_scale", (1.0, 1.0, 1.0))
+        object_cam   = getattr(sim_config, "object_cam",   "left")
+        # Select camera-to-world transform: maps ob_in_cam (OpenCV) -> world frame
+        T_cam_world = T_CAM_LEFT_WORLD if object_cam == "left" else T_CAM_RIGHT_WORLD
         if trajectory_npy and Path(trajectory_npy).exists():
             object_traj = np.load(trajectory_npy)  # (N, 4, 4)
+            if len(object_traj) != n_frames:
+                print(f"WARNING: trajectory length {len(object_traj)} != H5 length {n_frames} — will replay {min(len(object_traj), n_frames)} frames")
             n_frames = min(n_frames, len(object_traj))
-            obj_prim = XFormPrim(object_prim_path)
+            # Add object prim dynamically — objects are not baked into scene.usd.
+            if object_usd_path and Path(object_usd_path).exists():
+                stage.DefinePrim(object_prim_path, "Xform").GetReferences().AddReference(str(object_usd_path))
+                obj_prim = XFormPrim(object_prim_path)
+                # Scale via Isaac Sim API so it doesn't conflict with set_world_poses xform ops
+                obj_prim.set_local_scales(np.array([object_scale], dtype=np.float32))
+                print(f"[object] Added {object_prim_path} from {object_usd_path} scale={object_scale} cam={object_cam}")
+            else:
+                print(f"WARNING: no object_usd_path given — skipping object replay")
+                object_traj = None
             print(f"\n===== OBJECT TRAJECTORY =====")
             print(f"trajectory : {trajectory_npy}")
-            print(f"shape      : {object_traj.shape}")
+            print(f"shape      : {object_traj.shape if object_traj is not None else 'skipped'}")
             print(f"prim       : {object_prim_path}")
         elif trajectory_npy:
             print(f"WARNING: trajectory_npy not found: {trajectory_npy}")
@@ -407,13 +431,13 @@ class Simulator:
                 if set_joints:
                     arm_left.set_joint_positions(q_full_l)
 
-            # Object trajectory replay
+            # Object trajectory replay: ob_in_cam (OpenCV) -> world frame
             if obj_prim is not None:
-                ob_in_usd = CV2USD @ object_traj[frame]
-                t = ob_in_usd[:3, 3].astype(np.float32)
-                q_xyzw = Rotation.from_matrix(ob_in_usd[:3, :3]).as_quat()
+                ob_in_world = T_cam_world @ object_traj[frame]
+                t = ob_in_world[:3, 3].astype(np.float32)
+                q_xyzw = Rotation.from_matrix(ob_in_world[:3, :3]).as_quat()
                 q_wxyz = np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=np.float32)
-                obj_prim.set_world_pose(position=t, orientation=q_wxyz)
+                obj_prim.set_world_poses(positions=t.reshape(1, 3), orientations=q_wxyz.reshape(1, 4))
 
             viz_offset = np.array([0.0, 0.0, 1.0], dtype=np.float32)
             if visualizer is not None:
