@@ -303,37 +303,33 @@ class Simulator:
         if left_hand_data is not None:
             n_frames = min(n_frames, len(left_hand_data))
 
-        # Object trajectory (.npy of shape (N, 4, 4), ob_in_cam, OpenCV convention)
-        obj_prim = None
-        object_traj = None
-        trajectory_npy = getattr(sim_config, "trajectory_npy", None)
-        object_prim_path = getattr(sim_config, "object_prim_path", "/World/rubber_duck")
-        object_usd_path = getattr(sim_config, "object_usd_path", None)
-        object_scale = getattr(sim_config, "object_scale", (1.0, 1.0, 1.0))
-        object_cam   = getattr(sim_config, "object_cam",   "left")
-        # Select camera-to-world transform: maps ob_in_cam (OpenCV) -> world frame
+        # Object trajectory replay: ob_in_cam (OpenCV) -> world frame
+        object_cam = getattr(sim_config, "object_cam", "right")
+        object_scale = getattr(sim_config, "object_scale", 0.001)
         T_cam_world = T_CAM_LEFT_WORLD if object_cam == "left" else T_CAM_RIGHT_WORLD
-        if trajectory_npy and Path(trajectory_npy).exists():
-            object_traj = np.load(trajectory_npy)  # (N, 4, 4)
-            if len(object_traj) != n_frames:
-                print(f"WARNING: trajectory length {len(object_traj)} != H5 length {n_frames} — will replay {min(len(object_traj), n_frames)} frames")
-            n_frames = min(n_frames, len(object_traj))
-            # Add object prim dynamically — objects are not baked into scene.usd.
-            if object_usd_path and Path(object_usd_path).exists():
-                stage.DefinePrim(object_prim_path, "Xform").GetReferences().AddReference(str(object_usd_path))
-                obj_prim = XFormPrim(object_prim_path)
-                # Scale via Isaac Sim API so it doesn't conflict with set_world_poses xform ops
-                obj_prim.set_local_scales(np.array([object_scale], dtype=np.float32))
-                print(f"[object] Added {object_prim_path} from {object_usd_path} scale={object_scale} cam={object_cam}")
-            else:
-                print(f"WARNING: no object_usd_path given — skipping object replay")
-                object_traj = None
-            print(f"\n===== OBJECT TRAJECTORY =====")
-            print(f"trajectory : {trajectory_npy}")
-            print(f"shape      : {object_traj.shape if object_traj is not None else 'skipped'}")
-            print(f"prim       : {object_prim_path}")
-        elif trajectory_npy:
-            print(f"WARNING: trajectory_npy not found: {trajectory_npy}")
+        scale_3 = (object_scale, object_scale, object_scale)
+        h5_n_frames = n_frames
+
+        active_objects = []  # list of (XFormPrim, traj ndarray)
+        for obj_cfg in getattr(sim_config, "objects", []):
+            usd_path = Path(obj_cfg.usd_path)
+            traj_path = Path(obj_cfg.trajectory_npy)
+            prim_path = obj_cfg.prim_path or f"/World/{usd_path.stem}"
+            if not usd_path.exists():
+                print(f"WARNING: object USD not found: {usd_path} — skipping")
+                continue
+            if not traj_path.exists():
+                print(f"WARNING: trajectory not found: {traj_path} — skipping")
+                continue
+            traj = np.load(traj_path)  # (N, 4, 4)
+            if len(traj) != h5_n_frames:
+                print(f"WARNING: {usd_path.name} trajectory length {len(traj)} != H5 length {h5_n_frames}")
+            n_frames = min(n_frames, len(traj))
+            stage.DefinePrim(prim_path, "Xform").GetReferences().AddReference(str(usd_path))
+            prim = XFormPrim(prim_path)
+            prim.set_local_scales(np.array([scale_3], dtype=np.float32))
+            active_objects.append((prim, traj))
+            print(f"[object] {prim_path}  usd={usd_path.name}  traj_len={len(traj)}  scale={object_scale}  cam={object_cam}")
 
         if vis_config is None:
             vis_config = VisConfig(enabled=False)
@@ -431,8 +427,7 @@ class Simulator:
                 if set_joints:
                     arm_left.set_joint_positions(q_full_l)
 
-            # Object trajectory replay: ob_in_cam (OpenCV) -> world frame
-            if obj_prim is not None:
+            for obj_prim, object_traj in active_objects:
                 ob_in_world = T_cam_world @ object_traj[frame]
                 t = ob_in_world[:3, 3].astype(np.float32)
                 q_xyzw = Rotation.from_matrix(ob_in_world[:3, :3]).as_quat()

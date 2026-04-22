@@ -1,8 +1,15 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.visualization import VisConfig
 from isaacsim import SimulationApp
+
+
+@dataclass
+class ObjectConfig:
+    usd_path: Path
+    trajectory_npy: Path
+    prim_path: str = None  # auto: /World/<usd_stem> if None
 
 
 @dataclass
@@ -12,11 +19,9 @@ class SimConfig:
     enable_left: bool = True
     camera_eye: tuple = (1.97035, 0.00915, 1.58108)
     camera_target: tuple = (0.51, 0.0, 1.23)
-    trajectory_npy: str = None        # path to (N,4,4) object trajectory .npy
-    object_prim_path: str = "/World/rubber_duck"
-    object_usd_path: Path = None      # USD asset to add if prim is missing from scene
-    object_scale: tuple = (0.001, 0.001, 0.001)  # uniform scale applied at prim creation (mm→m for rubber_duck.usd)
-    object_cam: str = "right"                      # TODO: confirm which camera trajectory.npy was recorded from ("left" or "right")
+    object_cam: str = "right"    # TODO: confirm which camera trajectories were recorded from
+    object_scale: float = 0.001  # uniform mm→m applied to all objects
+    objects: list = field(default_factory=list)  # list[ObjectConfig]
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,8 +33,12 @@ SIM = SimConfig(
     set_joints=True,
     enable_right=True,
     enable_left=True,
-    trajectory_npy=BASE_DIR / "data" / "trajectory.npy",
-    object_usd_path=BASE_DIR / "assets" / "objects" / "rubber_duck.usd",
+    objects=[
+        ObjectConfig(
+            usd_path=BASE_DIR / "assets" / "objects" / "rubber_duck.usd",
+            trajectory_npy=BASE_DIR / "data" / "trajectory.npy",
+        ),
+    ],
 )
 
 VIS = VisConfig(
