@@ -1,13 +1,12 @@
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
-from isaacsim.robot_motion.motion_generation.lula.kinematics import LulaKinematicsSolver
+from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver
 
 import omni.usd
 import h5py
 import numpy as np
 import time
-import os
 from pathlib import Path
 from scipy.spatial.transform import Rotation
 
@@ -31,10 +30,21 @@ CV2USD = np.array([
     [0,  0,  0,  1],
 ], dtype=np.float64)
 
+import isaacsim.robot_motion.motion_generation as _mg_pkg
+_MOTION_GEN_EXT = Path(_mg_pkg.__file__).parents[3]
+
+PANDA_ARM_DESCRIPTION_PATH = str(
+    _MOTION_GEN_EXT / "motion_policy_configs" / "franka" / "rmpflow" / "robot_descriptor.yaml"
+)
+PANDA_ARM_URDF_PATH = str(
+    _MOTION_GEN_EXT / "motion_policy_configs" / "franka" / "lula_franka_gen.urdf"
+)
+
 FRANKA_RIGHT_PATH = "/World/fer_orcahand_right_extended"
 FRANKA_LEFT_PATH = "/World/fer_orcahand_left_extended"
-EE_FRAME_NAME = "fer_link8"
-EE_WRIST_OFFSET_IN_LINK8 = np.array([0.13, 0.0, 0.07], dtype=np.float32)
+EE_FRAME_NAME = "panda_hand"
+# TODO: update to exact measured flange→orca-wrist offset vector
+EE_FLANGE_TO_EEF_OFFSET = np.array([0.13, 0.0, 0.07], dtype=np.float32)
 Q_TOOL_TO_URDF_WXYZ = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)  # Rx(180°)
 
 ARM_JOINT_NAMES = [f"panda_joint{i}" for i in range(1, 8)]
@@ -57,28 +67,17 @@ HAND_RIGHT_JOINT_NAMES = [
 
 
 class Simulator:
-    def __init__(self, app, stage_path, h5_path, description_root=None):
+    def __init__(self, app, stage_path, h5_path):
         self.app = app
         self.stage_path = str(stage_path)
         self.h5_path = str(h5_path)
-        self.description_root = Path(
-            description_root
-            or os.environ.get(
-                "PANDAORCA_ROOT",
-                "/local/home/teamb/Desktop/Real2Sim/assets/pandaorca_description-main",
-            )
-        )
-        self.lula_descriptor_path = self.description_root / "lula" / "fer_robot_descriptor.yaml"
-        self.urdf_path_left = self.description_root / "urdf" / "fer_orcahand_left_extended.urdf"
-        self.urdf_path_right = self.description_root / "urdf" / "fer_orcahand_right_extended.urdf"
 
         missing = []
         for label, path in [
-            ("Stage (USD scene)", self.stage_path),
-            ("H5 dataset", self.h5_path),
-            ("Lula robot descriptor", self.lula_descriptor_path),
-            ("Left combined URDF", self.urdf_path_left),
-            ("Right combined URDF", self.urdf_path_right),
+            ("Stage (USD scene)",       self.stage_path),
+            ("H5 dataset",              self.h5_path),
+            ("Franka robot descriptor", PANDA_ARM_DESCRIPTION_PATH),
+            ("Franka Lula URDF",        PANDA_ARM_URDF_PATH),
         ]:
             if not Path(path).exists():
                 missing.append(f"  {label}: {path}")
@@ -194,10 +193,10 @@ class Simulator:
         print(f"[quat] {label}: appears to be wxyz ordering. Using as-is.")
         return arm_data
 
-    def _create_ik_solver(self, urdf_path, label):
+    def _create_ik_solver(self, label):
         solver = LulaKinematicsSolver(
-            robot_description_path=str(self.lula_descriptor_path.resolve()),
-            urdf_path=str(Path(urdf_path).resolve()),
+            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
+            urdf_path=PANDA_ARM_URDF_PATH,
         )
         print(f"[IK] Solver ({label}) created. Active joints: {solver.get_joint_names()}")
         print(f"[IK] Available frames ({label}): {solver.get_all_frame_names()}")
@@ -230,7 +229,7 @@ class Simulator:
 
     def _compute_arm_ik(self, solver, target_wrist_pos, target_quat_wxyz, warm_start=None):
         rot = self._wxyz_to_rotation_matrix(target_quat_wxyz)
-        ik_position = np.asarray(target_wrist_pos, dtype=np.float32) - rot @ EE_WRIST_OFFSET_IN_LINK8
+        ik_position = np.asarray(target_wrist_pos, dtype=np.float32) - rot @ EE_FLANGE_TO_EEF_OFFSET
         joint_positions, success = solver.compute_inverse_kinematics(
             frame_name=EE_FRAME_NAME,
             target_position=ik_position,
@@ -269,8 +268,8 @@ class Simulator:
         arm_idx_l = self._resolve_dof_indices(arm_left, ARM_JOINT_NAMES, "LEFT COMBINED ROBOT")
         hand_idx_l = self._resolve_dof_indices(arm_left, HAND_LEFT_JOINT_NAMES, "LEFT COMBINED ROBOT")
 
-        solver_r = self._create_ik_solver(self.urdf_path_right, "right")
-        solver_l = self._create_ik_solver(self.urdf_path_left, "left")
+        solver_r = self._create_ik_solver("right")
+        solver_l = self._create_ik_solver("left")
 
         with h5py.File(self.h5_path, "r") as f:
             right_arm_data = np.array(f["observations/qpos_arm_right"])

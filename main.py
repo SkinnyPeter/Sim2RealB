@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-import os
 
 from src.visualization import VisConfig
 from isaacsim import SimulationApp
@@ -18,14 +17,8 @@ class SimConfig:
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DESCRIPTION_ROOT = Path(
-    os.environ.get(
-        "PANDAORCA_ROOT",
-        "/local/home/teamb/Desktop/Real2Sim/assets/pandaorca_description-main",
-    )
-)
 
-data_path = Path(os.environ.get("SIM2REAL_H5", "/local/home/teamb/Desktop/data/20250827_151212.h5"))
+data_path = BASE_DIR / "data" / "20250827_151212.h5"
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 SIM = SimConfig(
@@ -47,7 +40,6 @@ def _check_paths():
     for label, path in [
         ("Scene", scene_path),
         ("Data", data_path),
-        ("pandaorca_description", DESCRIPTION_ROOT),
     ]:
         if not Path(path).exists():
             missing.append(f"  {label}: {path}")
@@ -64,7 +56,7 @@ def main():
 
     from src.simulator import Simulator
 
-    simulator = Simulator(simulation_app, str(scene_path), str(data_path), str(DESCRIPTION_ROOT))
+    simulator = Simulator(simulation_app, str(scene_path), str(data_path))
     simulator.play(sim_config=SIM, vis_config=VIS)
 
     simulation_app.close()
