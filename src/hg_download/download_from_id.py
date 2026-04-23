@@ -64,8 +64,8 @@ LOCAL_H5_DIR = LOCAL_DATA_DIR / "h5"
 LOCAL_TRAJ_DIR = LOCAL_DATA_DIR / "trajectories"
 
 # Remote folder structure inside the Hugging Face repo.
-REMOTE_H5_DIR = "h5"
-REMOTE_TRAJ_DIR = "trajectories"
+REMOTE_H5_DIR = "data/h5"
+REMOTE_TRAJ_DIR = "data/trajectories"
 
 # Expected sample ID format: 8 digits + "_" + 6 digits.
 ID_PATTERN = re.compile(r"^\d{8}_\d{6}$")
@@ -264,7 +264,7 @@ def download_file(remote_path: str, local_dir: Path, token: str) -> Path:
             filename=remote_path,
             repo_type=HF_REPO_TYPE,
             token=token,
-            local_dir=BASE_DIR,
+            local_dir=local_dir,
             local_dir_use_symlinks=False,
         )
         return Path(downloaded_path)
@@ -414,11 +414,11 @@ def main() -> None:
 
     # Download selected files.
     if can_download_h5:
-        downloaded_h5 = download_file(remote_h5_path, LOCAL_H5_DIR, token)
+        downloaded_h5 = download_file(remote_h5_path, BASE_DIR, token)
         print(f"Downloaded H5 file to: {downloaded_h5}")
 
     if can_download_traj:
-        downloaded_traj = download_file(remote_traj_path, LOCAL_TRAJ_DIR, token)
+        downloaded_traj = download_file(remote_traj_path, BASE_DIR, token)
         print(f"Downloaded trajectory file to: {downloaded_traj}")
 
     print("Done.")
