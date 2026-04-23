@@ -64,9 +64,8 @@ LOCAL_H5_DIR = LOCAL_DATA_DIR / "h5"
 LOCAL_TRAJ_DIR = LOCAL_DATA_DIR / "trajectories"
 
 # Remote folder structure inside the Hugging Face repo.
-REMOTE_DATA_DIR = "data"
-REMOTE_H5_DIR = f"{REMOTE_DATA_DIR}/h5"
-REMOTE_TRAJ_DIR = f"{REMOTE_DATA_DIR}/trajectories"
+REMOTE_H5_DIR = "h5"
+REMOTE_TRAJ_DIR = "trajectories"
 
 # Expected sample ID format: 8 digits + "_" + 6 digits.
 ID_PATTERN = re.compile(r"^\d{8}_\d{6}$")
@@ -350,11 +349,11 @@ def main() -> None:
     assert token is not None
 
     # List all files inside the hg repo (debugging)
-    """
+    
     repo_files = get_repo_file_set(token)
     for file in repo_files:
         print(f"  - {file}")
-    """
+    
 
     # Check missing files on the remote repository.
     remote_h5_exists = local_h5_exists or remote_file_exists(remote_h5_path, token)
