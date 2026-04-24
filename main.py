@@ -26,7 +26,7 @@ class SimConfig:
 
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "h5" / "20250826_111157.h5"
+data_path = BASE_DIR / "data" / "h5" / "20250804_105355.h5"
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 SIM = SimConfig(

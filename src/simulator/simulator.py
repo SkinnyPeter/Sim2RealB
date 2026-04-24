@@ -26,8 +26,8 @@ from src.simulator.quat_utils import (
     tool_quat_to_urdf,
     detect_quaternion_order
 )
-
 from src.simulator.IK_solver import FrankaIKController
+from src.data.h5_loader import load_replay_h5
 
 # Camera-to-world transforms (T_base_in_world @ best_calib["cam"]) from compute_camera_transform.py.
 # Each matrix maps a point in that camera's OpenCV frame to the USD world frame.
@@ -229,36 +229,28 @@ class Simulator:
             flange_to_eef_offset=EE_FLANGE_TO_EEF_OFFSET,
         )
 
-        # TODO There are different h5 path structure possible
+        # Load the robot joints data inside h5 file
+        replay = load_replay_h5(self.h5_path)
 
-        # ASSESS WHICH H5 TYPE IT IS
+        right_arm_data = replay.right_arm
+        left_arm_data = replay.left_arm
+        right_hand_data = replay.right_hand
+        left_hand_data = replay.left_hand
+        n_frames = replay.n_frames
+        structure = replay.structure
 
-        # ASSIGN THE CORRESPONDING JOINT DATA
-        
-        with h5py.File(self.h5_path, "r") as f:
-            right_arm_data = np.array(f["observations/qpos_arm_right"])
-            left_arm_data = np.array(f["observations/qpos_arm_left"])
-            right_hand_data = np.array(f["observations/qpos_hand_right"]) if "observations/qpos_hand_right" in f else None
-            left_hand_data = np.array(f["observations/qpos_hand_left"]) if "observations/qpos_hand_left" in f else None
-
-        right_arm_data = detect_quaternion_order(right_arm_data, "right")
-        left_arm_data = detect_quaternion_order(left_arm_data, "left")
-
-        print("\n===== H5 DATA =====")
-        print("right_arm_data shape :", right_arm_data.shape)
-        print("left_arm_data shape  :", left_arm_data.shape)
-        if right_hand_data is not None:
-            print("right_hand_data shape:", right_hand_data.shape)
-        if left_hand_data is not None:
-            print("left_hand_data shape :", left_hand_data.shape)
-
-        n_frames = min(len(right_arm_data), len(left_arm_data))
-        if right_hand_data is not None:
-            n_frames = min(n_frames, len(right_hand_data))
-        if left_hand_data is not None:
-            n_frames = min(n_frames, len(left_hand_data))
-
-        # END OF H5
+        # Assuming its always the right arm playing when there is only data for one arm enables/disables the arm
+        # If one of them is already set to False it is a user simulation preference, does change it
+        if structure == "structure_1":
+            print("[H5] Following h5 structure, only one arm playing - assume its the right arm")
+            if enable_left:
+                print("[H5] Left arm enabled but one arm detected in h5. Disabling left.")
+                enable_left = False
+            if not enable_right:
+                print("[H5] Right arm disabled but one arm detected in h5. Enabling right.")
+                enable_right = True
+        else:
+            print("[H5] Following h5 structure, two arms playing")
 
         # Object trajectory replay: ob_in_cam (OpenCV) -> world frame
         object_cam = getattr(sim_config, "object_cam", "right")
