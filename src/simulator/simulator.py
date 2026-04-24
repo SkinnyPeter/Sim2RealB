@@ -1,7 +1,6 @@
 from isaacsim.core.utils.stage import open_stage
 from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
-from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver
 
 import omni.usd
 import h5py
@@ -25,9 +24,10 @@ from src.visualization import (
 from src.simulator.quat_utils import (
     normalize_quat_wxyz,
     tool_quat_to_urdf,
-    wxyz_to_rotation_matrix,
     detect_quaternion_order
 )
+
+from src.simulator.IK_solver import FrankaIKController
 
 # Camera-to-world transforms (T_base_in_world @ best_calib["cam"]) from compute_camera_transform.py.
 # Each matrix maps a point in that camera's OpenCV frame to the USD world frame.
@@ -46,6 +46,7 @@ T_CAM_RIGHT_WORLD = np.array([
 ], dtype=np.float64)
 
 import isaacsim.robot_motion.motion_generation as _mg_pkg
+
 _MOTION_GEN_EXT = Path(_mg_pkg.__file__).parents[3]
 
 PANDA_ARM_DESCRIPTION_PATH = str(
@@ -158,15 +159,6 @@ class Simulator:
 
         return np.array(indices, dtype=int)
 
-    def _create_ik_solver(self, label):
-        solver = LulaKinematicsSolver(
-            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
-            urdf_path=PANDA_ARM_URDF_PATH,
-        )
-        print(f"[IK] Solver ({label}) created. Active joints: {solver.get_joint_names()}")
-        print(f"[IK] Available frames ({label}): {solver.get_all_frame_names()}")
-        return solver
-
     @staticmethod
     def _resolve_descendant_prim_path(stage, subtree_root, prim_name):
         direct_path = f"{subtree_root}/{prim_name}"
@@ -192,18 +184,6 @@ class Simulator:
             f"Ambiguous prim '{prim_name}' under '{subtree_root}': {matches}"
         )
 
-    def _compute_arm_ik(self, solver, target_wrist_pos, target_quat_wxyz, warm_start=None):
-        rot = wxyz_to_rotation_matrix(target_quat_wxyz)
-        ik_position = np.asarray(target_wrist_pos, dtype=np.float32) - rot @ EE_FLANGE_TO_EEF_OFFSET
-        joint_positions, success = solver.compute_inverse_kinematics(
-            frame_name=EE_FRAME_NAME,
-            target_position=ik_position,
-            target_orientation=target_quat_wxyz,
-            warm_start=warm_start,
-        )
-        if success:
-            return np.asarray(joint_positions, dtype=np.float32), True
-        return None, False
 
     def play(self, sim_config=None, vis_config=None):
         set_joints = getattr(sim_config, "set_joints", True)
@@ -233,8 +213,21 @@ class Simulator:
         arm_idx_l = self._resolve_dof_indices(arm_left, ARM_JOINT_NAMES, "LEFT COMBINED ROBOT")
         hand_idx_l = self._resolve_dof_indices(arm_left, HAND_LEFT_JOINT_NAMES, "LEFT COMBINED ROBOT")
 
-        solver_r = self._create_ik_solver("right")
-        solver_l = self._create_ik_solver("left")
+        solver_r = FrankaIKController(
+            label="right",
+            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
+            urdf_path=PANDA_ARM_URDF_PATH,
+            ee_frame_name=EE_FRAME_NAME,
+            flange_to_eef_offset=EE_FLANGE_TO_EEF_OFFSET,
+        )
+
+        solver_l = FrankaIKController(
+            label="left",
+            robot_description_path=PANDA_ARM_DESCRIPTION_PATH,
+            urdf_path=PANDA_ARM_URDF_PATH,
+            ee_frame_name=EE_FRAME_NAME,
+            flange_to_eef_offset=EE_FLANGE_TO_EEF_OFFSET,
+        )
 
         # TODO There are different h5 path structure possible
 
@@ -344,8 +337,10 @@ class Simulator:
                 quat_tool_r = normalize_quat_wxyz(wrist_pose_r[3:7])
                 quat_urdf_r = tool_quat_to_urdf(quat_tool_r)
                 q_full_r = arm_right.get_joint_positions().copy()
-                q_arm_r, ok_r = self._compute_arm_ik(
-                    solver_r, pos_r, quat_urdf_r, warm_start=prev_arm_r
+                q_arm_r, ok_r = solver_r.compute(
+                    target_wrist_pos=pos_r,
+                    target_quat_wxyz=quat_urdf_r,
+                    warm_start=prev_arm_r,
                 )
                 if ok_r:
                     q_full_r[arm_idx_r] = q_arm_r
@@ -371,8 +366,10 @@ class Simulator:
                 quat_tool_l = normalize_quat_wxyz(wrist_pose_l[3:7])
                 quat_urdf_l = tool_quat_to_urdf(quat_tool_l)
                 q_full_l = arm_left.get_joint_positions().copy()
-                q_arm_l, ok_l = self._compute_arm_ik(
-                    solver_l, pos_l, quat_urdf_l, warm_start=prev_arm_l
+                q_arm_l, ok_l = solver_l.compute(
+                    target_wrist_pos=pos_l,
+                    target_quat_wxyz=quat_urdf_l,
+                    warm_start=prev_arm_l,
                 )
                 if ok_l:
                     q_full_l[arm_idx_l] = q_arm_l
