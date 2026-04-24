@@ -280,6 +280,12 @@ class Simulator:
         solver_r = self._create_ik_solver("right")
         solver_l = self._create_ik_solver("left")
 
+        # TODO There are different h5 path structure possible
+
+        # ASSESS WHICH H5 TYPE IT IS
+
+        # ASSIGN THE CORRESPONDING JOINT DATA
+        
         with h5py.File(self.h5_path, "r") as f:
             right_arm_data = np.array(f["observations/qpos_arm_right"])
             left_arm_data = np.array(f["observations/qpos_arm_left"])
@@ -302,6 +308,8 @@ class Simulator:
             n_frames = min(n_frames, len(right_hand_data))
         if left_hand_data is not None:
             n_frames = min(n_frames, len(left_hand_data))
+
+        # END OF H5
 
         # Object trajectory replay: ob_in_cam (OpenCV) -> world frame
         object_cam = getattr(sim_config, "object_cam", "right")

@@ -26,7 +26,7 @@ class SimConfig:
 
 BASE_DIR = Path(__file__).resolve().parent
 
-data_path = BASE_DIR / "data" / "20250827_151212.h5"
+data_path = BASE_DIR / "data" / "h5" / "20250826_111157.h5"
 scene_path = BASE_DIR / "scenes" / "scene.usd"
 
 SIM = SimConfig(
@@ -68,7 +68,7 @@ def main():
 
     simulation_app = SimulationApp({"headless": False})
 
-    from src.simulator import Simulator
+    from src.simulator.simulator import Simulator
 
     simulator = Simulator(simulation_app, str(scene_path), str(data_path))
     simulator.play(sim_config=SIM, vis_config=VIS)
