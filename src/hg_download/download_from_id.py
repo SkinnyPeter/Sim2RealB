@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+
 from huggingface_hub import HfApi, file_exists, hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.utils import EntryNotFoundError
@@ -47,6 +48,7 @@ from huggingface_hub.utils import EntryNotFoundError
 # Global configuration
 # ============================================================================
 
+DEBUG = False
 # Base directory of your project.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -55,8 +57,11 @@ HF_REPO_ID = "Sim2RealB/Sim2RealB_dataset"
 HF_REPO_TYPE = "dataset"
 
 # Optional token for private repo access.
-# Leave as None to use the token from `hf auth login`.
-HF_TOKEN = None
+# Leave as None in the .env to use the token from `hf auth login`.
+from dotenv import load_dotenv
+import os
+load_dotenv() # Loads .env where the secret key is stored
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 
 # Local folder structure.
 LOCAL_DATA_DIR = BASE_DIR / "data"
@@ -348,12 +353,12 @@ def main() -> None:
 
     assert token is not None
 
-    # List all files inside the hg repo (debugging)
-    
-    repo_files = get_repo_file_set(token)
-    for file in repo_files:
-        print(f"  - {file}")
-    
+    if DEBUG:
+        print("Listing files from HF repo")
+        # List all files inside the hg repo (debugging)
+        repo_files = get_repo_file_set(token)
+        for file in repo_files:
+            print(f"  - {file}")
 
     # Check missing files on the remote repository.
     remote_h5_exists = local_h5_exists or remote_file_exists(remote_h5_path, token)
