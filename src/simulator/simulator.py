@@ -25,7 +25,7 @@ from src.simulator.quat_utils import (
     tool_quat_to_urdf,
 )
 from src.simulator.IK_solver import FrankaIKController
-from src.data.h5_loader import load_replay_h5
+from src.data_load.h5_loader import load_replay_h5
 
 # Camera-to-world transforms (T_base_in_world @ best_calib["cam"]) from compute_camera_transform.py.
 # Each matrix maps a point in that camera's OpenCV frame to the USD world frame.

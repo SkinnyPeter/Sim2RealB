@@ -36,7 +36,7 @@ SIM = SimConfig(
     objects=[
         ObjectConfig(
             usd_path=BASE_DIR / "assets" / "objects" / "rubber_duck.usd",
-            trajectory_npy=BASE_DIR / "data" / "trajectory.npy",
+            trajectory_npy=BASE_DIR / "data" / "20250804_105355_trajectory.npy",
         ),
     ],
 )
