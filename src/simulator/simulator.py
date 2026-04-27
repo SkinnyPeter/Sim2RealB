@@ -3,7 +3,6 @@ from isaacsim.core.api import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
 
 import omni.usd
-import h5py
 import numpy as np
 import time
 from pathlib import Path
@@ -24,7 +23,6 @@ from src.visualization import (
 from src.simulator.quat_utils import (
     normalize_quat_wxyz,
     tool_quat_to_urdf,
-    detect_quaternion_order
 )
 from src.simulator.IK_solver import FrankaIKController
 from src.data.h5_loader import load_replay_h5
