@@ -55,7 +55,7 @@ def _check_paths():
         ("Scene", scene_path),
         ("Data", data_path),
     ]:
-        if not Path(path).exists():
+        if not path.exists():
             missing.append(f"  {label}: {path}")
     if missing:
         raise FileNotFoundError(
@@ -70,7 +70,7 @@ def main():
 
     from src.simulator.simulator import Simulator
 
-    simulator = Simulator(simulation_app, str(scene_path), str(data_path))
+    simulator = Simulator(simulation_app, scene_path, data_path)
     simulator.play(sim_config=SIM, vis_config=VIS)
 
     simulation_app.close()
